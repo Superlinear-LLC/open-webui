@@ -1,0 +1,72 @@
+diff --git a/backend/open_webui/socket/main.py b/backend/open_webui/socket/main.py
+--- a/backend/open_webui/socket/main.py
++++ b/backend/open_webui/socket/main.py
+@@ -917,14 +917,15 @@ async def _make_channel_emitter(request_info):
+ 
+ 
+ async def get_event_emitter(request_info, update_db=True):
++    chat_id = request_info.get('chat_id') or ''
++    message_id = request_info.get('message_id')
++
+     # Channel mode: route pipeline output to channel message updates
+-    if (request_info.get('chat_id') or '').startswith('channel:'):
++    if chat_id.startswith('channel:'):
+         return await _make_channel_emitter(request_info)
+ 
+     async def __event_emitter__(event_data):
+         user_id = request_info['user_id']
+-        chat_id = request_info['chat_id']
+-        message_id = request_info['message_id']
+ 
+         await sio.emit(
+             'events',
+@@ -936,7 +936,7 @@ async def get_event_emitter(request_info, update_db=True):
+             room=f'user:{user_id}',
+         )
+ 
+-        if update_db and message_id and not (request_info.get('chat_id') or '').startswith('local:'):
++        if update_db and message_id and not chat_id.startswith('local:'):
+             event_type = event_data.get('type')
+ 
+             if event_type == 'status':
+@@ -1028,8 +1028,8 @@ async def get_event_emitter(request_info, update_db=True):
+                             'sources': sources,
+                         },
+                     )
+ 
+-    if 'user_id' in request_info and 'chat_id' in request_info and 'message_id' in request_info:
++    if request_info.get('user_id') and chat_id and message_id:
+         return __event_emitter__
+     else:
+         return None
+@@ -1060,7 +1060,7 @@ async def get_event_call(request_info):
+             log.warning(f'Event caller timed out for session {session_id}')
+             return {'error': 'Event call timed out. The browser tab may be inactive or closed.'}
+ 
+-    if 'session_id' in request_info and 'chat_id' in request_info and 'message_id' in request_info:
++    if request_info.get('session_id') and request_info.get('chat_id') and request_info.get('message_id'):
+         return __event_caller__
+     else:
+         return None
+diff --git a/backend/open_webui/utils/middleware.py b/backend/open_webui/utils/middleware.py
+--- a/backend/open_webui/utils/middleware.py
++++ b/backend/open_webui/utils/middleware.py
+@@ -3056,12 +3056,13 @@ async def background_tasks_handler(ctx):
+     message = None
+     messages = []
+ 
++    chat_id = metadata.get('chat_id')
+     if (
+-        'chat_id' in metadata
+-        and not metadata.get('chat_id', '').startswith('local:')
+-        and not metadata.get('chat_id', '').startswith('channel:')
++        chat_id
++        and not chat_id.startswith('local:')
++        and not chat_id.startswith('channel:')
+     ):
+-        messages_map = await Chats.get_messages_map_by_chat_id(metadata['chat_id'])
++        messages_map = await Chats.get_messages_map_by_chat_id(chat_id)
+         if not messages_map:
+             # Chat was deleted while the response was streaming — skip background tasks
+             return
+

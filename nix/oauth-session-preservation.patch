@@ -1,0 +1,33 @@
+diff --git a/backend/open_webui/utils/oauth.py b/backend/open_webui/utils/oauth.py
+--- a/backend/open_webui/utils/oauth.py
++++ b/backend/open_webui/utils/oauth.py
+@@ -1000,10 +1000,11 @@ class OAuthClientManager:
+                 if refreshed_token:
+                     return refreshed_token
+                 else:
++                    # Preserve the session so an auxiliary refresh failure does
++                    # not silently revoke the client authorization.
+                     log.warning(
+-                        f'Token refresh failed for user {user_id}, client_id {session.provider}, deleting session {session.id}'
++                        f'Token refresh failed for user {user_id}, client_id {session.provider}; preserving session {session.id}'
+                     )
+-                    await OAuthSessions.delete_session_by_id(session.id)
+                     return None
+             return session.token
+ 
+@@ -1278,11 +1278,11 @@ class OAuthManager:
+                 if refreshed_token:
+                     return refreshed_token
+                 else:
++                    # Preserve the session so an auxiliary refresh failure does
++                    # not silently log the user out.
+                     log.warning(
+-                        f'Token refresh failed for user {user_id}, provider {session.provider}, deleting session {session.id}'
++                        f'Token refresh failed for user {user_id}, provider {session.provider}; preserving session {session.id}'
+                     )
+-                    await OAuthSessions.delete_session_by_id(session.id)
+-
+                     return None
+             return session.token
+ 
+

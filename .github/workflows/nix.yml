@@ -1,0 +1,23 @@
+name: Nix package
+
+on:
+  push:
+    tags:
+      - "v*"
+      - "nix-v*"
+  workflow_dispatch:
+
+jobs:
+  build-aarch64-darwin:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: DeterminateSystems/nix-installer-action@v17
+      - uses: DeterminateSystems/magic-nix-cache-action@v9
+      - name: Build Open WebUI
+        run: nix build .#open-webui --print-build-logs
+      - name: Verify package metadata
+        run: |
+          nix run nixpkgs#python312 -- -c 'import sys; print(sys.version)'
+          test -x result/bin/open-webui
+          result/bin/open-webui --help >/dev/null
