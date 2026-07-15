@@ -121,6 +121,7 @@ in
     googleapis-common-protos
     httpx
     itsdangerous
+    joserfc
     langchain
     langchain-classic
     langchain-community
