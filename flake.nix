@@ -15,7 +15,15 @@
               allowUnsupportedSystem = true;
             };
           };
-          pythonPackages = pkgs.python312Packages;
+          pythonPackages = pkgs.python312Packages.overrideScope (final: prev: {
+            # nixpkgs-unstable currently runs jaraco-test's suite with pytest 9,
+            # but that suite crashes during report generation. It is only a
+            # transitive test dependency of Open WebUI, so skip its broken test
+            # hook while retaining the package itself.
+            jaraco-test = prev.jaraco-test.overridePythonAttrs (_: {
+              doCheck = false;
+            });
+          });
           package = pkgs.callPackage ./nix/package.nix {
             inherit pythonPackages;
           };
