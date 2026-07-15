@@ -23,6 +23,10 @@
             jaraco-test = prev.jaraco-test.overridePythonAttrs (_: {
               doCheck = false;
             });
+            opentelemetry-exporter-otlp-proto-grpc =
+              prev.opentelemetry-exporter-otlp-proto-grpc.overridePythonAttrs (_: {
+                doCheck = false;
+              });
           });
           package = pkgs.callPackage ./nix/package.nix {
             inherit pythonPackages;
