@@ -12,6 +12,7 @@
             config = {
               allowUnfree = true;
               allowBroken = true;
+              allowUnsupportedSystem = true;
             };
           };
           pythonPackages = pkgs.python312Packages;
