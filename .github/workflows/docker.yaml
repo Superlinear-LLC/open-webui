@@ -1,13 +1,16 @@
 name: Create and publish Docker images with specific build args
 
+# DISABLED IN THIS FORK (push triggers only; workflow_dispatch kept).
+# Upstream publishes container images to ghcr.io on every push to main and on
+# every v* tag. This fork carries nix packaging only — the images it produced
+# were never consumed by anything, and the tag trigger would fire again on the
+# rollback anchor. Nothing here builds or ships containers, so the publish is
+# pure side effect.
+#
+# Left in place rather than deleted, so rebasing the nix series onto the next
+# upstream tag conflicts here instead of silently restoring the triggers.
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
-      - dev
-    tags:
-      - v*
 
 concurrency:
   group: docker-${{ github.ref }}
