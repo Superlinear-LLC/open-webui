@@ -9,26 +9,31 @@
 
 let
   pname = "open-webui";
-  version = "0.10.2";
+  version = "0.11.1";
 
   src = fetchFromGitHub {
     owner = "open-webui";
     repo = "open-webui";
     tag = "v${version}";
-    hash = "sha256-tJ9b5up5FoX5TrmpwMWevyA/o3Ai/lKsHu+nahc2Ttc=";
+    hash = "sha256-W3RzBYUtI32Ft1Nw5JM7Z/mgYELNAlFCJmrNa2Wnhu4=";
   };
 
   frontend = buildNpmPackage rec {
     pname = "open-webui-frontend";
     inherit version src;
 
-    pyodideVersion = "0.28.3";
+    # Must match the `pyodide` version resolved in the upstream package-lock.json
+    # for this tag: the frontend is built against that loader, and preBuild
+    # unpacks this distribution in place of the `pyodide:fetch` script that
+    # postPatch strips out. Upstream pyodide switched to CPython-tracking
+    # version numbers (0.28.x -> 314.x) between Open WebUI 0.10.2 and 0.11.1.
+    pyodideVersion = "314.0.3";
     pyodide = fetchurl {
-      url = "https://github.com/pyodide/pyodide/releases/download/0.28.3/pyodide-0.28.3.tar.bz2";
-      hash = "sha256-fcqubT8VmGoJ8PnmxHE6DA8kv/DJDHToWoFyPxvGCUA=";
+      url = "https://github.com/pyodide/pyodide/releases/download/${pyodideVersion}/pyodide-${pyodideVersion}.tar.bz2";
+      hash = "sha256-oCgELZDbqedP377PNuqn1X6IvwrWGNnFBZ6xBAqnYSo=";
     };
 
-    npmDepsHash = "sha256-yw/1n1jBCUtt8wUqJmIkB3W53wsXTKuAFG/EMwcTpx8=";
+    npmDepsHash = "sha256-5W/IMa23b0afAlw5Md8KvJYQmRen8u1dfUG2RAKDOn0=";
 
     npmFlags = [
       "--force"
@@ -64,9 +69,12 @@ in
   inherit pname version src;
   pyproject = true;
 
+  # stateless-chat-null-guards.patch was dropped at 0.11.1: upstream introduced
+  # open_webui/utils/chat_id.py:is_saved_chat_id(), which is a strict superset of
+  # what that patch guarded — it is None-safe and also covers the new
+  # "temporary:" prefix the patch predated.
   patches = [
     ./oauth-session-preservation.patch
-    ./stateless-chat-null-guards.patch
   ];
 
   build-system = [ pythonPackages.hatchling ];
@@ -83,6 +91,12 @@ in
   dependencies = with pythonPackages; [
     accelerate
     aiocache
+    # Upstream pins aiodns==3.6.1 and warns that 4.x pulls pycares 5 (c-ares
+    # 1.34.6), which breaks DNS on some hosts; nixpkgs carries 4.x and
+    # pythonRelaxDeps lets it through. Only reachable when aiohttp's async
+    # resolver is opted into via AIOHTTP_CLIENT_ASYNC_DNS_RESOLVER, which this
+    # deployment does not set.
+    aiodns
     aiofiles
     aiohttp
     aiosqlite
@@ -119,6 +133,7 @@ in
     google-cloud-storage
     google-genai
     googleapis-common-protos
+    hiredis
     httpx
     itsdangerous
     joserfc
@@ -128,6 +143,7 @@ in
     langchain-text-splitters
     ldap3
     loguru
+    lxml
     markdown
     mcp
     msoffcrypto-tool
@@ -137,6 +153,7 @@ in
     opencv-python-headless
     openpyxl
     opensearch-py
+    orjson
     pandas
     peewee
     peewee-migrate
@@ -154,8 +171,8 @@ in
     pypandoc
     pydantic
     pypdf
+    python-docx
     python-dotenv
-    python-jose
     python-mimeparse
     python-multipart
     python-pptx
@@ -164,8 +181,9 @@ in
     pytz
     pyxlsb
     rank-bm25
-    rapidocr-onnxruntime
+    rapidocr
     redis
+    regex
     requests
     restrictedpython
     sentence-transformers
