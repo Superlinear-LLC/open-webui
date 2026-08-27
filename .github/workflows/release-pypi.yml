@@ -1,10 +1,17 @@
 name: Release to PyPI
 
+# DISABLED IN THIS FORK. Upstream ships this to publish the `open-webui`
+# project to PyPI via trusted publishing, on every push to main. A fork must
+# never attempt that: it would be an attempted publish of modified code under
+# upstream's package name.
+#
+# It has run on every push to this fork's main and FAILED every time, including
+# 2026-08-27 — PyPI's trusted publisher for `open-webui` is bound to upstream's
+# repository, so the OIDC claim from this fork does not match and nothing was
+# ever published. That is the only reason it stayed harmless, and it is not a
+# control we own. Turned off so it is not attempted at all.
 on:
-  push:
-    branches:
-      - main # or whatever branch you want to use
-      - pypi-release
+  workflow_dispatch:
 
 jobs:
   release:

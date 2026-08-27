@@ -4,9 +4,17 @@
 # ─────────────────────────────────────────────────────────────────────────────
 name: Release
 
+# DISABLED IN THIS FORK. Upstream publishes a GitHub Release from package.json
+# on every push to main. This fork exists only to carry nix packaging on top of
+# an upstream release tag, so that automation produces releases that shadow
+# upstream's: the 2026-08-27 push created a release tagged "v0.11.1" pointing at
+# the nix packaging HEAD rather than upstream's v0.11.1 commit, so anyone
+# comparing the two inside this fork gets a misleading answer.
+#
+# Left in place rather than deleted, so rebasing the nix series onto the next
+# upstream tag shows a conflict here instead of silently restoring the trigger.
 on:
-  push:
-    branches: [main]
+  workflow_dispatch:
 
 concurrency:
   group: release-${{ github.ref }}
