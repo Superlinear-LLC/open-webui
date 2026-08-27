@@ -69,10 +69,20 @@ in
   inherit pname version src;
   pyproject = true;
 
-  # stateless-chat-null-guards.patch was dropped at 0.11.1: upstream introduced
-  # open_webui/utils/chat_id.py:is_saved_chat_id(), which is a strict superset of
-  # what that patch guarded — it is None-safe and also covers the new
-  # "temporary:" prefix the patch predated.
+  # stateless-chat-null-guards.patch was dropped at 0.11.1. Upstream introduced
+  # open_webui/utils/chat_id.py:is_saved_chat_id() — None-safe, and covering the
+  # "temporary:" prefix the patch predated — and adopted it at the two sites that
+  # actually mattered: the socket save_to_chat guard and background_tasks_handler.
+  #
+  # It is NOT a superset of the whole patch, and an earlier version of this
+  # comment wrongly said it was. Upstream did not adopt the other half: the
+  # emitter/caller factory guards (socket/main.py, and the caller in
+  # functions.py) are still key-presence tests, not truthiness. So for a
+  # present-but-None chat_id we now return an emitter where the patch returned
+  # None. That is a behaviour change, not a defect — the body's prefix checks are
+  # is_saved_chat_id() now, so such an emitter emits chat_id=None and skips the
+  # database write rather than raising. Re-verify this if upstream ever
+  # reintroduces a bare chat_id.startswith() in that path.
   patches = [
     ./oauth-session-preservation.patch
   ];

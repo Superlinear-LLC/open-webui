@@ -1,5 +1,6 @@
 {
-  description = "Open WebUI 0.10.2 Nix package";
+  # Keep in step with nix/package.nix `version` on every bump.
+  description = "Open WebUI 0.11.1 Nix package";
 
   inputs.nixpkgs.url = "github:nixos/nixpkgs/nixpkgs-unstable";
 
