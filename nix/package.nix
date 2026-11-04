@@ -148,7 +148,7 @@ let
       typing-inspection
       uvicorn
     ] ++ pythonPackages.pyjwt.optional-dependencies.crypto;
-    pythonImportsCheck = [ "mcp" "mcp.client.advertise" ];
+    pythonImportsCheck = [ "mcp" "mcp.client" ];
     meta.license = lib.licenses.mit;
   };
 in
