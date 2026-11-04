@@ -29,13 +29,9 @@ from starlette.responses import FileResponse
 log = logging.getLogger(__name__)
 
 
-##################################
-#
 # Pipeline Middleware
 # Every hand this passes through can corrupt it or
 # improve it. Let each stage leave it better than it found.
-#
-##################################
 
 
 def get_sorted_filters(model_id, models):
@@ -68,6 +64,9 @@ async def process_pipeline_inlet_filter(request, payload, user, models):
 
     if 'pipeline' in model:
         sorted_filters.append(model)
+
+    if not sorted_filters:
+        return payload
 
     async with aiohttp.ClientSession(trust_env=True) as session:
         for filter in sorted_filters:
@@ -132,6 +131,9 @@ async def process_pipeline_outlet_filter(request, payload, user, models):
     if 'pipeline' in model:
         sorted_filters = [model] + sorted_filters
 
+    if not sorted_filters:
+        return payload
+
     async with aiohttp.ClientSession(trust_env=True) as session:
         for filter in sorted_filters:
             urlIdx = filter.get('urlIdx')
@@ -186,11 +188,7 @@ async def process_pipeline_outlet_filter(request, payload, user, models):
     return payload
 
 
-##################################
-#
 # Pipelines Endpoints
-#
-##################################
 
 router = APIRouter()
 

@@ -122,13 +122,17 @@
 		>
 			{#if shortcut.tooltip}
 				<Tooltip content={$i18n.t(shortcut.tooltip)}>
-					<span class="inline-flex max-w-full items-baseline gap-1">
-						<span class="truncate whitespace-pre-line">{$i18n.t(shortcut.name)}</span>
-						<span class="text-[0.625rem] text-gray-400 dark:text-gray-600">*</span>
+					<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+					<span class="relative inline-flex max-w-full items-baseline gap-1" tabindex="0">
+						<span class="truncate whitespace-pre-line">{shortcut.name($i18n.t)}</span>
+						<span class="text-[0.625rem] text-gray-400 dark:text-gray-600" aria-hidden="true"
+							>*</span
+						>
+						<span class="sr-only">{$i18n.t(shortcut.tooltip)}</span>
 					</span>
 				</Tooltip>
 			{:else}
-				<span class="whitespace-pre-line">{$i18n.t(shortcut.name)}</span>
+				<span class="whitespace-pre-line">{shortcut.name($i18n.t)}</span>
 			{/if}
 		</div>
 		{#if !compact}

@@ -1,5 +1,7 @@
 <script lang="ts">
-	import { onDestroy, onMount } from 'svelte';
+	import { getContext, onDestroy, onMount } from 'svelte';
+
+	const i18n: any = getContext('i18n');
 
 	export let open = false;
 	export let side: 'left' | 'right' = 'right';
@@ -9,12 +11,23 @@
 	export let minSiblingWidth = 0;
 	export let closeOnDragBelowMinWidth = false;
 	export let storageKey = '';
+	export let subtleDivider = false;
 	export let className = '';
 	export let resizerId = 'controls-resizer';
+	export let portalTarget: string | null = null;
 	export let onClose: () => void = () => {};
+
+	const portal = (node: HTMLElement) => {
+		const target = portalTarget ? document.getElementById(portalTarget) : null;
+		if (!target) return;
+		target.appendChild(node);
+		return { destroy: () => node.remove() };
+	};
 
 	let panelElement: HTMLDivElement | null = null;
 	let isResizing = false;
+	let activePointerId: number | null = null;
+	let activeResizer: HTMLElement | null = null;
 	let startClientX = 0;
 	let startWidth = 0;
 
@@ -48,19 +61,31 @@
 		onClose();
 	};
 
-	const resizeStartHandler = (e: MouseEvent) => {
+	const resizeStartHandler = (e: PointerEvent) => {
 		if (!open) return;
 
+		e.preventDefault();
 		isResizing = true;
+		activePointerId = e.pointerId;
+		activeResizer = e.currentTarget as HTMLElement;
+		activeResizer.setPointerCapture?.(e.pointerId);
 		startClientX = e.clientX;
 		startWidth = width;
 		document.body.style.userSelect = 'none';
 	};
 
-	const resizeEndHandler = () => {
+	const resizeEndHandler = (e?: PointerEvent) => {
 		if (!isResizing) return;
+		if (e && activePointerId !== null && e.pointerId !== activePointerId) return;
 
 		isResizing = false;
+		if (activePointerId !== null) {
+			if (activeResizer?.hasPointerCapture?.(activePointerId)) {
+				activeResizer.releasePointerCapture(activePointerId);
+			}
+		}
+		activePointerId = null;
+		activeResizer = null;
 		document.body.style.userSelect = '';
 		persistWidth();
 	};
@@ -88,8 +113,9 @@
 	onMount(() => {
 		if (!storageKey) return;
 
-		const storedWidth = Number(localStorage.getItem(storageKey));
-		if (!Number.isNaN(storedWidth)) {
+		const stored = localStorage.getItem(storageKey);
+		const storedWidth = Number(stored);
+		if (stored !== null && Number.isFinite(storedWidth) && storedWidth > 0) {
 			width = clamp(storedWidth);
 		}
 	});
@@ -109,53 +135,90 @@
 </script>
 
 <svelte:window
-	on:mousemove={(e) => {
+	on:pointermove={(e) => {
 		if (!isResizing) return;
+		if (activePointerId !== null && e.pointerId !== activePointerId) return;
 		resizeHandler(e.clientX);
 	}}
 	on:resize={() => {
 		if (open) width = clamp(width);
 	}}
-	on:mouseup={resizeEndHandler}
+	on:pointerup={resizeEndHandler}
+	on:pointercancel={resizeEndHandler}
 />
 
 {#if open}
 	{#if side === 'right'}
 		<!-- svelte-ignore a11y_no_noninteractive_element_interactions, a11y_no_noninteractive_tabindex -->
 		<div
-			class="relative flex items-center justify-center group border-l border-gray-50 dark:border-gray-850/30 hover:border-gray-200 dark:hover:border-gray-800 transition z-20 bg-transparent p-0 appearance-none"
+			class="relative flex items-center justify-center group border-l border-gray-50 dark:border-gray-850/30 hover:border-gray-200 dark:hover:border-gray-800 transition z-20 bg-transparent p-0 appearance-none {subtleDivider
+				? 'border-transparent! outline-none!'
+				: ''}"
 			id={resizerId}
-			on:mousedown={resizeStartHandler}
+			use:portal
+			on:pointerdown={resizeStartHandler}
 			on:keydown={resizeKeyHandler}
 			role="separator"
 			tabindex="0"
-			aria-label="Resize panel"
+			aria-label={$i18n.t('Resize panel')}
 			aria-orientation="vertical"
+			aria-valuenow={width}
+			aria-valuemin={minWidth}
+			aria-valuemax={maxWidth ?? undefined}
 		>
+			{#if subtleDivider}
+				<span
+					aria-hidden="true"
+					class="pointer-events-none absolute h-8 w-0.5 rounded-full bg-gray-300 dark:bg-gray-600 transition-opacity {isResizing
+						? 'opacity-100'
+						: 'opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100'}"
+				></span>
+			{/if}
 			<span
 				class="absolute -left-1.5 -right-1.5 -top-0 -bottom-0 z-20 cursor-col-resize bg-transparent"
+				style="touch-action: none;"
 			></span>
 		</div>
 	{/if}
 
-	<div bind:this={panelElement} class={className} style="width: {width}px; flex: 0 0 {width}px;">
+	<div
+		use:portal
+		bind:this={panelElement}
+		class={className}
+		style="width: {width}px; flex: 0 0 {width}px;"
+	>
 		<slot />
 	</div>
 
 	{#if side === 'left'}
 		<!-- svelte-ignore a11y_no_noninteractive_element_interactions, a11y_no_noninteractive_tabindex -->
 		<div
-			class="relative flex items-center justify-center group border-r border-gray-50 dark:border-gray-850/30 hover:border-gray-200 dark:hover:border-gray-800 transition z-20 bg-transparent p-0 appearance-none"
+			class="relative flex items-center justify-center group border-r border-gray-50 dark:border-gray-850/30 hover:border-gray-200 dark:hover:border-gray-800 transition z-20 bg-transparent p-0 appearance-none {subtleDivider
+				? 'border-transparent! outline-none!'
+				: ''}"
 			id={resizerId}
-			on:mousedown={resizeStartHandler}
+			use:portal
+			on:pointerdown={resizeStartHandler}
 			on:keydown={resizeKeyHandler}
 			role="separator"
 			tabindex="0"
-			aria-label="Resize panel"
+			aria-label={$i18n.t('Resize panel')}
 			aria-orientation="vertical"
+			aria-valuenow={width}
+			aria-valuemin={minWidth}
+			aria-valuemax={maxWidth ?? undefined}
 		>
+			{#if subtleDivider}
+				<span
+					aria-hidden="true"
+					class="pointer-events-none absolute h-8 w-0.5 rounded-full bg-gray-300 dark:bg-gray-600 transition-opacity {isResizing
+						? 'opacity-100'
+						: 'opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100'}"
+				></span>
+			{/if}
 			<span
 				class="absolute -left-1.5 -right-1.5 -top-0 -bottom-0 z-20 cursor-col-resize bg-transparent"
+				style="touch-action: none;"
 			></span>
 		</div>
 	{/if}

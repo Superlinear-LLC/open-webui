@@ -3,6 +3,7 @@ import { getChatList, getPinnedChatList } from '$lib/apis/chats';
 
 type ChatListItem = {
 	id: string;
+	pending_approval?: boolean;
 	[key: string]: unknown;
 };
 
@@ -15,7 +16,7 @@ export const pinnedChats = readonly(pinnedChatsStore);
 let currentPage = 1;
 let paginationReady = false;
 let requestGeneration = 0;
-let allLoaded = false;
+export let allLoaded = false;
 let loadingNextPage = false;
 
 type RefreshChatListOptions = {
@@ -47,9 +48,9 @@ export const refreshChatList = async (
 		return { accepted: false, allLoaded };
 	}
 
-	chatsStore.set(nextChats);
 	currentPage = 1;
 	allLoaded = nextChats.length === 0;
+	chatsStore.set(nextChats);
 
 	if (options.clearPinned) {
 		pinnedChatsStore.set([]);
@@ -77,6 +78,14 @@ export const refreshFolderChatLists = async (
 	chat?: ChatListItem | null
 ) => {
 	await Promise.all([...folderRefreshHandlers].map((handler) => handler(folderId, chat)));
+};
+
+export const refreshSidebar = async (token: string = '') => {
+	await Promise.all([
+		refreshChatList(token, { refreshPinned: true }),
+		refreshFolderChatLists(null),
+		refreshFolderChatLists()
+	]);
 };
 
 export const loadNextChatListPage = async (token: string = ''): Promise<ChatListResult> => {
@@ -108,14 +117,18 @@ export const loadNextChatListPage = async (token: string = ''): Promise<ChatList
 	}
 };
 
-export const setChatActive = (chatId: string, active: boolean): boolean => {
+export const setChatActive = (
+	chatId: string,
+	active: boolean,
+	pendingApproval = false
+): boolean => {
 	let found = false;
 	const updateChat = (chat: ChatListItem) => {
 		if (chat.id !== chatId) {
 			return chat;
 		}
 		found = true;
-		return { ...chat, active };
+		return { ...chat, active, pending_approval: pendingApproval };
 	};
 
 	chatsStore.update((items) => (items ? items.map(updateChat) : items));

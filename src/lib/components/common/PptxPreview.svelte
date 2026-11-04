@@ -1,12 +1,29 @@
 <script lang="ts">
-	import { onDestroy, onMount, tick } from 'svelte';
+	import { getContext, onDestroy, onMount, tick } from 'svelte';
 	import panzoom, { type PanZoom } from 'panzoom';
 	import { clampDocumentTargetPage } from '$lib/utils/documentPreview';
+	import Icon from '$lib/components/chat/FileNav/Icon.svelte';
+	import type { FileComment } from '$lib/utils/comments/types';
+
+	const i18n: any = getContext('i18n');
 
 	export let slides: string[] = [];
 	export let currentSlide = 0;
 	export let className = '';
 	export let targetPage: number | null = null;
+	export let itemLabel = 'Slide';
+	export let listLabel = 'Slides';
+	export let comments: FileComment[] = [];
+	export let selectedComment: FileComment | null = null;
+	export let onCommentSelect: ((comment: FileComment) => void) | null = null;
+	$: slideComments = comments.filter(
+		(c) =>
+			c.location?.kind === 'slide' &&
+			c.location.slide === safeSlide + 1 &&
+			c.location.x !== undefined &&
+			c.location.y !== undefined &&
+			!c.parentId
+	);
 
 	let rootEl: HTMLDivElement;
 	let stageEl: HTMLElement;
@@ -75,7 +92,8 @@
 			pinchSpeed: 3.5,
 			filterKey: (e?: KeyboardEvent) => !!e && slideShortcutKeys.includes(e.key),
 			beforeWheel: () => true,
-			beforeMouseDown: () => {
+			beforeMouseDown: (event?: MouseEvent) => {
+				if ((event?.target as HTMLElement)?.closest('[data-slide-comment]')) return true;
 				const transform = pzInstance?.getTransform();
 				return !!transform && Math.abs(transform.scale - 1) < 0.01;
 			}
@@ -117,6 +135,10 @@
 		} else {
 			selectSlide(safeSlide + 1);
 		}
+	};
+
+	const focusPreview = () => {
+		if (!rootEl?.contains(document.activeElement)) rootEl?.focus();
 	};
 
 	const zoomIn = () => {
@@ -225,10 +247,13 @@
 	});
 </script>
 
-<svelte:window on:keydown={handleKeyDown} />
-
 <div
 	bind:this={rootEl}
+	role="application"
+	aria-label={`${itemLabel} preview`}
+	tabindex="0"
+	on:keydown={handleKeyDown}
+	on:pointerdown={focusPreview}
 	class="relative grid {hideThumbs
 		? 'grid-cols-[minmax(0,1fr)]'
 		: 'grid-cols-[144px_minmax(0,1fr)]'} min-h-0 bg-transparent text-gray-900 dark:text-gray-100 {className}"
@@ -236,8 +261,8 @@
 	<aside
 		class={hideThumbs
 			? 'hidden'
-			: 'pptx-slide-rail overflow-y-auto px-2 pt-3 pb-16 border-r border-gray-50 dark:border-gray-850/30 bg-transparent'}
-		aria-label="Slides"
+			: 'thumbnail-sidebar overflow-y-auto px-2 pt-3 pb-16 border-r border-gray-50 dark:border-gray-850/30 bg-transparent'}
+		aria-label={listLabel}
 	>
 		{#each slides as slide, index}
 			<button
@@ -245,7 +270,7 @@
 				type="button"
 				class="grid grid-cols-[20px_minmax(0,1fr)] items-start gap-2 w-full mb-3 p-0 text-left text-gray-900 dark:text-gray-100"
 				on:click={() => selectSlide(index)}
-				aria-label="Slide {index + 1}"
+				aria-label="{itemLabel} {index + 1}"
 				aria-current={safeSlide === index ? 'true' : undefined}
 			>
 				<span
@@ -260,7 +285,7 @@
 				>
 					<img
 						src={slide}
-						alt="Slide {index + 1} thumbnail"
+						alt="{itemLabel} {index + 1} thumbnail"
 						class="block w-full h-full object-contain"
 						draggable="false"
 					/>
@@ -269,25 +294,44 @@
 		{/each}
 	</aside>
 
+	<!-- svelte-ignore a11y_no_static_element_interactions (Preserve native double-click behavior without changing touch zoom.) -->
 	<section
 		bind:this={stageEl}
 		class="min-w-0 min-h-0 overflow-hidden flex items-center justify-center overscroll-contain"
 		on:wheel|nonpassive={handleStageWheel}
+		on:dblclick|capture|stopPropagation={() => {}}
 	>
 		{#if selectedSlide}
 			<div
 				bind:this={sceneEl}
-				class="shrink-0"
+				class="shrink-0 relative"
 				style="width: {slideWidth}px; height: {slideHeight}px;"
 			>
 				<img
 					bind:this={slideImgEl}
 					src={selectedSlide}
-					alt="Slide {safeSlide + 1}"
+					alt="{itemLabel} {safeSlide + 1}"
 					class="block w-full h-full object-contain rounded"
 					draggable="false"
 					on:load={onSlideLoad}
 				/>
+				{#each slideComments as comment, index (comment.id)}
+					{#if comment.location?.kind === 'slide'}
+						<button
+							type="button"
+							data-slide-comment={comment.id}
+							data-file-comment-id={comment.id}
+							class="absolute flex size-5 items-center justify-center rounded bg-white/95 text-gray-400 hover:text-gray-600 dark:bg-gray-850/95 dark:text-gray-500 dark:hover:text-gray-300 focus-visible:outline focus-visible:outline-2"
+							class:ring-2={selectedComment?.id === comment.id ||
+								selectedComment?.parentId === comment.id}
+							style:left={`${comment.location.x !== undefined ? Math.max(0, Math.min(slideWidth - 24, comment.location.x * fitScale)) : 8}px`}
+							style:top={`${comment.location.y !== undefined ? Math.max(0, Math.min(slideHeight - 24, comment.location.y * fitScale)) : 8 + index * 28}px`}
+							aria-label={`${$i18n.t('Comment')}: ${comment.author || $i18n.t('Unknown author')}`}
+							on:click={() => onCommentSelect?.(comment)}
+							><Icon name="chat-bubble" size={12} strokeWidth={1.5} /></button
+						>
+					{/if}
+				{/each}
 			</div>
 		{/if}
 	</section>
@@ -303,7 +347,7 @@
 				class="shrink-0 min-w-7 h-7 inline-flex items-center justify-center p-1.5 rounded-md hover:bg-gray-100 dark:hover:bg-gray-800 transition text-gray-500 dark:text-gray-400 disabled:opacity-30"
 				disabled={safeSlide === 0}
 				on:click={() => selectSlide(safeSlide - 1)}
-				aria-label="Previous slide"
+				aria-label={`Previous ${itemLabel.toLowerCase()}`}
 			>
 				<svg
 					xmlns="http://www.w3.org/2000/svg"
@@ -327,7 +371,7 @@
 				class="shrink-0 min-w-7 h-7 inline-flex items-center justify-center p-1.5 rounded-md hover:bg-gray-100 dark:hover:bg-gray-800 transition text-gray-500 dark:text-gray-400 disabled:opacity-30"
 				disabled={safeSlide === slides.length - 1}
 				on:click={() => selectSlide(safeSlide + 1)}
-				aria-label="Next slide"
+				aria-label={`Next ${itemLabel.toLowerCase()}`}
 			>
 				<svg
 					xmlns="http://www.w3.org/2000/svg"
@@ -342,11 +386,12 @@
 					/>
 				</svg>
 			</button>
+			<!-- Pinch covers in/out on coarse pointers; reset has no gesture, so it stays -->
 			<button
 				type="button"
-				class="shrink-0 min-w-7 h-7 inline-flex items-center justify-center p-1.5 rounded-md hover:bg-gray-100 dark:hover:bg-gray-800 transition text-gray-500 dark:text-gray-400"
+				class="shrink-0 min-w-7 h-7 inline-flex items-center justify-center p-1.5 rounded-md hover:bg-gray-100 dark:hover:bg-gray-800 transition text-gray-500 dark:text-gray-400 pointer-coarse:hidden"
 				on:click={zoomOut}
-				aria-label="Zoom out"
+				aria-label={$i18n.t('Zoom out')}
 			>
 				<svg
 					xmlns="http://www.w3.org/2000/svg"
@@ -365,15 +410,15 @@
 				type="button"
 				class="shrink-0 min-w-12 h-7 px-1.5 py-1 text-center text-[0.6875rem] font-normal text-gray-500 dark:text-gray-400 rounded-md hover:bg-gray-100 dark:hover:bg-gray-800 transition tabular-nums"
 				on:click={resetView}
-				aria-label="Reset zoom"
+				aria-label={$i18n.t('Reset zoom')}
 			>
 				{Math.round(zoomLevel * 100)}%
 			</button>
 			<button
 				type="button"
-				class="shrink-0 min-w-7 h-7 inline-flex items-center justify-center p-1.5 rounded-md hover:bg-gray-100 dark:hover:bg-gray-800 transition text-gray-500 dark:text-gray-400"
+				class="shrink-0 min-w-7 h-7 inline-flex items-center justify-center p-1.5 rounded-md hover:bg-gray-100 dark:hover:bg-gray-800 transition text-gray-500 dark:text-gray-400 pointer-coarse:hidden"
 				on:click={zoomIn}
-				aria-label="Zoom in"
+				aria-label={$i18n.t('Zoom in')}
 			>
 				<svg
 					xmlns="http://www.w3.org/2000/svg"
@@ -391,36 +436,37 @@
 </div>
 
 <style>
-	.pptx-slide-rail {
+	:global(:where(html:not(.native-scrollbars))) .thumbnail-sidebar {
 		scrollbar-color: transparent transparent;
 	}
 
-	.pptx-slide-rail:hover,
-	.pptx-slide-rail:focus,
-	.pptx-slide-rail:focus-within,
-	.pptx-slide-rail:active {
+	:global(:where(html:not(.native-scrollbars))) .thumbnail-sidebar:hover,
+	:global(:where(html:not(.native-scrollbars))) .thumbnail-sidebar:focus,
+	:global(:where(html:not(.native-scrollbars))) .thumbnail-sidebar:focus-within,
+	:global(:where(html:not(.native-scrollbars))) .thumbnail-sidebar:active {
 		scrollbar-color: rgba(215, 215, 215, 0.6) transparent;
 	}
 
-	:global(.dark) .pptx-slide-rail:hover,
-	:global(.dark) .pptx-slide-rail:focus,
-	:global(.dark) .pptx-slide-rail:focus-within,
-	:global(.dark) .pptx-slide-rail:active {
+	:global(:where(html:not(.native-scrollbars)).dark) .thumbnail-sidebar:hover,
+	:global(:where(html:not(.native-scrollbars)).dark) .thumbnail-sidebar:focus,
+	:global(:where(html:not(.native-scrollbars)).dark) .thumbnail-sidebar:focus-within,
+	:global(:where(html:not(.native-scrollbars)).dark) .thumbnail-sidebar:active {
 		scrollbar-color: rgba(67, 67, 67, 0.6) transparent;
 	}
 
-	.pptx-slide-rail::-webkit-scrollbar-thumb {
+	:global(:where(html:not(.native-scrollbars))) .thumbnail-sidebar::-webkit-scrollbar-thumb {
 		visibility: hidden;
 	}
 
-	.pptx-slide-rail:hover::-webkit-scrollbar-thumb,
-	.pptx-slide-rail:focus::-webkit-scrollbar-thumb,
-	.pptx-slide-rail:focus-within::-webkit-scrollbar-thumb,
-	.pptx-slide-rail:active::-webkit-scrollbar-thumb {
+	:global(:where(html:not(.native-scrollbars))) .thumbnail-sidebar:hover::-webkit-scrollbar-thumb,
+	:global(:where(html:not(.native-scrollbars))) .thumbnail-sidebar:focus::-webkit-scrollbar-thumb,
+	:global(:where(html:not(.native-scrollbars)))
+		.thumbnail-sidebar:focus-within::-webkit-scrollbar-thumb,
+	:global(:where(html:not(.native-scrollbars))) .thumbnail-sidebar:active::-webkit-scrollbar-thumb {
 		visibility: visible;
 	}
 
-	.pptx-slide-rail::-webkit-scrollbar-corner {
+	:global(:where(html:not(.native-scrollbars))) .thumbnail-sidebar::-webkit-scrollbar-corner {
 		display: none;
 	}
 </style>

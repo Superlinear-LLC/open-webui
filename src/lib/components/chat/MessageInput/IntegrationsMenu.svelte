@@ -1,12 +1,30 @@
 <script lang="ts">
+	import { resolveLocalizedResource, resolveLocalizedFunction } from '$lib/utils/localizedContent';
+	import { functions as localizedFunctions } from '$lib/stores';
 	import { getContext, onDestroy, tick } from 'svelte';
 	import { fly } from 'svelte/transition';
 
-	import { user, tools as _tools, skills as _skills, toolServers } from '$lib/stores';
+	import {
+		chatId,
+		config,
+		selectedTerminalId,
+		settings,
+		terminalServers,
+		terminalSkills,
+		user,
+		tools as _tools,
+		skills as _skills,
+		toolServers
+	} from '$lib/stores';
 
 	import { deleteOAuthSession } from '$lib/apis/auths';
 	import { getTools } from '$lib/apis/tools';
 	import { getSkills } from '$lib/apis/skills';
+	import {
+		listTerminalSkills,
+		resolveTerminalConnection,
+		type TerminalSkill
+	} from '$lib/apis/terminal';
 
 	import { toast } from 'svelte-sonner';
 
@@ -108,14 +126,22 @@
 
 	const setTools = (toolItems: IntegrationItem[] | null, query = '') => {
 		const q = query.trim().toLowerCase();
-		const items = (toolItems ?? []).reduce<Record<string, IntegrationItem>>((a, tool) => {
-			a[tool.id] = {
-				...tool,
-				name: tool.name,
-				description: tool.meta?.description
-			};
-			return a;
-		}, {});
+		const items = (toolItems ?? [])
+			.filter(
+				(tool) =>
+					!q ||
+					`${tool.name} ${resolveLocalizedResource(tool, $i18n.language)} ${resolveLocalizedResource(tool, $i18n.language, 'description')}`
+						.toLowerCase()
+						.includes(q)
+			)
+			.reduce<Record<string, IntegrationItem>>((a, tool) => {
+				a[tool.id] = {
+					...tool,
+					name: tool.name,
+					description: tool.meta?.description
+				};
+				return a;
+			}, {});
 
 		for (const serverIdx in ($toolServers ?? []) as any[]) {
 			const server = (($toolServers ?? []) as any[])[serverIdx];
@@ -142,7 +168,14 @@
 
 	const setSkills = (skillItems: IntegrationItem[] | null, query = '') => {
 		skills = (skillItems ?? [])
-			.filter((skill) => skill.is_active)
+			.filter(
+				(skill) =>
+					skill.is_active &&
+					(!query.trim() ||
+						`${skill.name} ${resolveLocalizedResource(skill, $i18n.language)} ${resolveLocalizedResource(skill, $i18n.language, 'description')}`
+							.toLowerCase()
+							.includes(query.trim().toLowerCase()))
+			)
 			.reduce<Record<string, IntegrationItem>>((a, skill) => {
 				a[skill.id] = {
 					...skill,
@@ -157,17 +190,22 @@
 		}
 	};
 
+	const getTerminalSkillItems = async (): Promise<TerminalSkill[]> => {
+		const connection = resolveTerminalConnection(
+			$selectedTerminalId,
+			$terminalServers ?? [],
+			$settings?.terminalServers ?? [],
+			localStorage.token
+		);
+		const items = await listTerminalSkills(connection, $chatId || null).catch(() => []);
+		terminalSkills.set(items);
+		return items;
+	};
+
 	const loadTools = async (query = toolQuery) => {
 		const requestId = ++toolRequestId;
 		const q = query.trim();
 		searchedToolQuery = query;
-
-		if (q) {
-			const toolItems = await getTools(localStorage.token, q).catch(() => []);
-			if (requestId !== toolRequestId) return;
-			setTools(toolItems, q);
-			return;
-		}
 
 		if ($_tools === null) {
 			await _tools.set(await getTools(localStorage.token));
@@ -181,18 +219,13 @@
 		const q = query.trim();
 		searchedSkillQuery = query;
 
-		if (q) {
-			const skillItems = await getSkills(localStorage.token, q).catch(() => []);
-			if (requestId !== skillRequestId) return;
-			setSkills(skillItems, q);
-			return;
-		}
-
 		if ($_skills === null) {
 			await _skills.set(await getSkills(localStorage.token));
 		}
 		if (requestId !== skillRequestId) return;
-		setSkills($_skills, q);
+		const terminalItems = await getTerminalSkillItems();
+		if (requestId !== skillRequestId) return;
+		setSkills([...($_skills ?? []), ...terminalItems], q);
 	};
 
 	const scheduleToolSearch = () => {
@@ -249,6 +282,9 @@
 		}
 	};
 
+	const skillSourceLabel = (skill: IntegrationItem | undefined) =>
+		skill?.source === 'terminal' ? $i18n.t('Terminal') : '';
+
 	onDestroy(() => {
 		clearTimeout(toolSearchDebounceTimer);
 		clearTimeout(skillSearchDebounceTimer);
@@ -279,6 +315,7 @@
 					{#if tools}
 						{#if Object.keys(tools).length > 0}
 							<button
+								role="menuitem"
 								class="flex w-full justify-between gap-2 items-center h-[1.6875rem] px-2 text-[0.8125rem] font-normal cursor-pointer rounded-xl hover:bg-gray-50/40 dark:hover:bg-gray-800/40"
 								on:click={() => {
 									tab = 'tools';
@@ -301,6 +338,7 @@
 
 						{#if skills && Object.keys(skills).length > 0}
 							<button
+								role="menuitem"
 								class="flex w-full justify-between gap-2 items-center h-[1.6875rem] px-2 text-[0.8125rem] font-normal cursor-pointer rounded-xl hover:bg-gray-50/40 dark:hover:bg-gray-800/40"
 								on:click={() => {
 									tab = 'skills';
@@ -328,10 +366,18 @@
 
 					{#if toggleFilters && toggleFilters.length > 0}
 						{#each toggleFilters.sort( (a, b) => a.name.localeCompare( b.name, undefined, { sensitivity: 'base' } ) ) as filter, filterIdx (filter.id)}
-							<Tooltip content={filter?.description} placement="top-start">
-								<button
-									class="flex w-full justify-between gap-2 items-center h-[1.6875rem] px-2 text-[0.8125rem] font-normal cursor-pointer rounded-xl hover:bg-gray-50/40 dark:hover:bg-gray-800/40"
-									aria-pressed={selectedFilterIds.includes(filter.id)}
+							<Tooltip
+								content={resolveLocalizedFunction(
+									filter,
+									$localizedFunctions,
+									$i18n.language,
+									'description'
+								)}
+								placement="top-start"
+							>
+								<div
+									class="flex w-full justify-between gap-2 items-center h-[1.6875rem] px-2 text-[0.8125rem] font-normal cursor-pointer rounded-xl hover:bg-gray-50/40 dark:hover:bg-gray-800/40 has-[[role^=menuitem]:focus-visible]:outline-2 has-[[role^=menuitem]:focus-visible]:-outline-offset-2 has-[[role^=menuitem]:focus-visible]:outline-blue-500"
+									role="presentation"
 									on:click={() => {
 										if (selectedFilterIds.includes(filter.id)) {
 											selectedFilterIds = selectedFilterIds.filter((id) => id !== filter.id);
@@ -340,7 +386,12 @@
 										}
 									}}
 								>
-									<div class="flex-1 truncate">
+									<button
+										type="button"
+										class="flex-1 truncate text-left cursor-pointer focus-visible:outline-none!"
+										role="menuitemcheckbox"
+										aria-checked={selectedFilterIds.includes(filter.id)}
+									>
 										<div class="flex flex-1 gap-2 items-center">
 											<div class="shrink-0">
 												{#if filter?.icon}
@@ -351,7 +402,11 @@
 																? 'dark:invert-[80%]'
 																: ''}"
 															style="fill: currentColor;"
-															alt={filter.name}
+															alt={resolveLocalizedFunction(
+																filter,
+																$localizedFunctions,
+																$i18n.language
+															)}
 														/>
 													</div>
 												{:else}
@@ -359,14 +414,17 @@
 												{/if}
 											</div>
 
-											<div class=" truncate">{filter?.name}</div>
+											<div class=" truncate">
+												{resolveLocalizedFunction(filter, $localizedFunctions, $i18n.language)}
+											</div>
 										</div>
-									</div>
+									</button>
 
 									{#if filter?.has_user_valves && ($user?.role === 'admin' || ($user?.permissions?.chat?.valves ?? true))}
 										<div class=" shrink-0">
 											<Tooltip content={$i18n.t('Valves')}>
 												<button
+													aria-label={$i18n.t('Valves')}
 													class="self-center w-fit text-sm text-gray-600 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 transition rounded-full"
 													type="button"
 													on:click={(e) => {
@@ -387,7 +445,7 @@
 									<div class=" shrink-0" inert>
 										<Switch state={selectedFilterIds.includes(filter.id)} />
 									</div>
-								</button>
+								</div>
 							</Tooltip>
 						{/each}
 					{/if}
@@ -396,9 +454,14 @@
 						<Tooltip content={$i18n.t('Search the internet')} placement="top-start">
 							<button
 								class="flex w-full justify-between gap-2 items-center h-[1.6875rem] px-2 text-[0.8125rem] font-normal cursor-pointer rounded-xl hover:bg-gray-50/40 dark:hover:bg-gray-800/40"
-								aria-pressed={webSearchEnabled}
+								role="menuitemcheckbox"
+								aria-checked={webSearchEnabled}
 								on:click={() => {
 									webSearchEnabled = !webSearchEnabled;
+									// Left open, this menu would swallow the first click on the confirmation dialog
+									if (webSearchEnabled && $config?.features?.enable_web_search_confirmation) {
+										show = false;
+									}
 									onWebSearchToggle(webSearchEnabled);
 								}}
 							>
@@ -423,7 +486,8 @@
 						<Tooltip content={$i18n.t('Generate an image')} placement="top-start">
 							<button
 								class="flex w-full justify-between gap-2 items-center h-[1.6875rem] px-2 text-[0.8125rem] font-normal cursor-pointer rounded-xl hover:bg-gray-50/40 dark:hover:bg-gray-800/40"
-								aria-pressed={imageGenerationEnabled}
+								role="menuitemcheckbox"
+								aria-checked={imageGenerationEnabled}
 								on:click={() => {
 									imageGenerationEnabled = !imageGenerationEnabled;
 								}}
@@ -449,7 +513,8 @@
 						<Tooltip content={$i18n.t('Execute code for analysis')} placement="top-start">
 							<button
 								class="flex w-full justify-between gap-2 items-center h-[1.6875rem] px-2 text-[0.8125rem] font-normal cursor-pointer rounded-xl hover:bg-gray-50/40 dark:hover:bg-gray-800/40"
-								aria-pressed={codeInterpreterEnabled}
+								role="menuitemcheckbox"
+								aria-checked={codeInterpreterEnabled}
 								on:click={() => {
 									codeInterpreterEnabled = !codeInterpreterEnabled;
 								}}
@@ -474,6 +539,7 @@
 			{:else if tab === 'tools' && tools}
 				<div class="flex max-h-72 min-h-0 flex-col gap-0.5" in:fly={{ x: 20, duration: 150 }}>
 					<button
+						role="menuitem"
 						class="flex w-full justify-between gap-2 items-center h-[1.6875rem] px-2 text-[0.8125rem] font-normal cursor-pointer rounded-xl hover:bg-gray-50/40 dark:hover:bg-gray-800/40"
 						on:click={() => {
 							toolQuery = '';
@@ -498,11 +564,9 @@
 						{:else}
 							<div class="flex flex-col gap-0.5">
 								{#each toolIds as toolId}
-									<button
-										class="relative flex w-full justify-between gap-2 items-center h-[1.6875rem] px-2 text-[0.8125rem] font-normal cursor-pointer rounded-xl hover:bg-gray-50/40 dark:hover:bg-gray-800/40"
-										aria-pressed={(tools?.[toolId]?.authenticated ?? true)
-											? selectedToolIds.includes(toolId)
-											: undefined}
+									<div
+										class="relative flex w-full justify-between gap-2 items-center h-[1.6875rem] px-2 text-[0.8125rem] font-normal cursor-pointer rounded-xl hover:bg-gray-50/40 dark:hover:bg-gray-800/40 has-[[role^=menuitem]:focus-visible]:outline-2 has-[[role^=menuitem]:focus-visible]:-outline-offset-2 has-[[role^=menuitem]:focus-visible]:outline-blue-500"
+										role="presentation"
 										on:click={async (e) => {
 											await toggleTool(toolId, e);
 										}}
@@ -511,23 +575,49 @@
 											<!-- make it slighly darker and not clickable -->
 											<div class="absolute inset-0 opacity-50 rounded-xl cursor-pointer z-10"></div>
 										{/if}
-										<div class="flex-1 truncate">
+										<button
+											type="button"
+											class="flex-1 truncate text-left cursor-pointer focus-visible:outline-none!"
+											role={(tools?.[toolId]?.authenticated ?? true)
+												? 'menuitemcheckbox'
+												: 'menuitem'}
+											aria-checked={(tools?.[toolId]?.authenticated ?? true)
+												? selectedToolIds.includes(toolId)
+												: undefined}
+										>
 											<div class="flex flex-1 gap-2 items-center">
-												<Tooltip content={tools?.[toolId]?.name ?? ''} placement="top">
+												<Tooltip
+													content={resolveLocalizedResource(
+														tools?.[toolId],
+														$i18n.language,
+														'name'
+													)}
+													placement="top"
+												>
 													<div class="shrink-0">
 														<Wrench />
 													</div>
 												</Tooltip>
-												<Tooltip content={tools?.[toolId]?.description ?? ''} placement="top-start">
-													<div class=" truncate">{tools?.[toolId]?.name}</div>
+												<Tooltip
+													content={resolveLocalizedResource(
+														tools?.[toolId],
+														$i18n.language,
+														'description'
+													)}
+													placement="top-start"
+												>
+													<div class=" truncate">
+														{resolveLocalizedResource(tools?.[toolId], $i18n.language, 'name')}
+													</div>
 												</Tooltip>
 											</div>
-										</div>
+										</button>
 
-										{#if (tools?.[toolId]?.authenticated ?? true) && toolId.startsWith('server:mcp:')}
+										{#if tools?.[toolId]?.authenticated === true && toolId.startsWith('server:mcp:')}
 											<div class="shrink-0">
 												<Tooltip content={$i18n.t('Disconnect OAuth')}>
 													<button
+														aria-label={$i18n.t('Disconnect OAuth')}
 														class="self-center w-fit text-sm text-gray-600 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 transition rounded-full"
 														type="button"
 														on:click={async (e) => {
@@ -561,6 +651,7 @@
 											<div class=" shrink-0">
 												<Tooltip content={$i18n.t('Valves')}>
 													<button
+														aria-label={$i18n.t('Valves')}
 														class="self-center w-fit text-sm text-gray-600 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 transition rounded-full"
 														type="button"
 														on:click={(e) => {
@@ -581,7 +672,7 @@
 										<div class=" shrink-0" inert>
 											<Switch state={selectedToolIds.includes(toolId)} />
 										</div>
-									</button>
+									</div>
 								{/each}
 							</div>
 						{/if}
@@ -590,6 +681,7 @@
 			{:else if tab === 'skills' && skills}
 				<div class="flex max-h-72 min-h-0 flex-col gap-0.5" in:fly={{ x: 20, duration: 150 }}>
 					<button
+						role="menuitem"
 						class="flex w-full justify-between gap-2 items-center h-[1.6875rem] px-2 text-[0.8125rem] font-normal cursor-pointer rounded-xl hover:bg-gray-50/40 dark:hover:bg-gray-800/40"
 						on:click={() => {
 							skillQuery = '';
@@ -616,24 +708,43 @@
 								{#each skillIds as skillId}
 									<button
 										class="relative flex w-full justify-between gap-2 items-center h-[1.6875rem] px-2 text-[0.8125rem] font-normal cursor-pointer rounded-xl hover:bg-gray-50/40 dark:hover:bg-gray-800/40"
-										aria-pressed={selectedSkillIds.includes(skillId)}
+										role="menuitemcheckbox"
+										aria-checked={selectedSkillIds.includes(skillId)}
 										on:click={async () => {
 											await toggleSkill(skillId);
 										}}
 									>
 										<div class="flex-1 truncate">
 											<div class="flex flex-1 gap-2 items-center">
-												<Tooltip content={skills?.[skillId]?.name ?? ''} placement="top">
+												<Tooltip
+													content={resolveLocalizedResource(
+														skills?.[skillId],
+														$i18n.language,
+														'name'
+													)}
+													placement="top"
+												>
 													<div class="shrink-0">
 														<Cube className="size-3.5" strokeWidth="1.75" />
 													</div>
 												</Tooltip>
 												<Tooltip
-													content={skills?.[skillId]?.description ?? ''}
+													content={resolveLocalizedResource(
+														skills?.[skillId],
+														$i18n.language,
+														'description'
+													)}
 													placement="top-start"
 												>
-													<div class=" truncate">{skills?.[skillId]?.name}</div>
+													<div class=" truncate">
+														{resolveLocalizedResource(skills?.[skillId], $i18n.language, 'name')}
+													</div>
 												</Tooltip>
+												{#if skillSourceLabel(skills?.[skillId])}
+													<div class="shrink-0 text-[0.6875rem] text-gray-500 dark:text-gray-400">
+														{skillSourceLabel(skills?.[skillId])}
+													</div>
+												{/if}
 											</div>
 										</div>
 

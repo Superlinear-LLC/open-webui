@@ -18,6 +18,7 @@
 	import XMark from '../icons/XMark.svelte';
 	import Image from './Image.svelte';
 	import FullHeightIframe from './FullHeightIframe.svelte';
+	import MCPApp from '$lib/components/chat/Messages/MCPApp.svelte';
 	import { settings } from '$lib/stores';
 
 	export let id: string = '';
@@ -35,6 +36,7 @@
 
 	export let open = false;
 	export let grouped = false;
+	export let allowEmbeds = false;
 	export let className = '';
 	export let resolvable = false;
 	export let resolving = false;
@@ -163,6 +165,7 @@
 	};
 
 	const toggleOpenOnKeydown = (event: KeyboardEvent) => {
+		if (event.target !== event.currentTarget) return;
 		if (event.key !== 'Enter' && event.key !== ' ') {
 			return;
 		}
@@ -173,7 +176,7 @@
 </script>
 
 <div {id} class={className}>
-	{#if !grouped && embeds && Array.isArray(embeds) && embeds.length > 0}
+	{#if allowEmbeds && !grouped && embeds && Array.isArray(embeds) && embeds.length > 0}
 		<!-- Embed Mode: Show iframes without collapsible behavior -->
 		<div class="py-1 w-full cursor-pointer">
 			<div class="w-full text-xs text-gray-500">
@@ -181,14 +184,18 @@
 			</div>
 			{#each embeds as embed, idx}
 				<div class="my-2" id={`${componentId}-tool-call-embed-${idx}`}>
-					<FullHeightIframe
-						src={embed}
-						{args}
-						allowScripts={true}
-						allowForms={$settings?.iframeSandboxAllowForms ?? false}
-						allowSameOrigin={$settings?.iframeSandboxAllowSameOrigin ?? false}
-						allowPopups={true}
-					/>
+					{#if typeof embed === 'object' && embed?.type === 'mcp_app'}
+						{#key embed}<MCPApp app={embed} />{/key}
+					{:else if typeof embed === 'string'}
+						<FullHeightIframe
+							src={embed}
+							{args}
+							allowScripts={true}
+							allowForms={$settings?.iframeSandboxAllowForms ?? false}
+							allowSameOrigin={$settings?.iframeSandboxAllowSameOrigin ?? false}
+							allowPopups={true}
+						/>
+					{/if}
 				</div>
 			{/each}
 		</div>
@@ -198,6 +205,7 @@
 			class="{buttonClassName} w-full min-w-0 cursor-pointer"
 			role="button"
 			tabindex="0"
+			aria-expanded={open}
 			on:click={toggleOpen}
 			on:keydown={toggleOpenOnKeydown}
 		>

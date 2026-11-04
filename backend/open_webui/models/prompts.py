@@ -9,6 +9,8 @@ from typing import Optional
 
 log = logging.getLogger(__name__)
 
+from open_webui.models.notifications import emit_changes
+from open_webui.models.comments import delete_resource_comments
 from open_webui.internal.db import Base, JSONField, get_async_db_context
 from open_webui.models.access_grants import AccessGrantModel, AccessGrants
 from open_webui.models.groups import Groups
@@ -47,7 +49,7 @@ class PromptModel(BaseModel):
     content: str
     data: dict | None = None
     meta: dict | None = None
-    tags: list[str | None] = None
+    tags: list[str] | None = None
     is_active: bool | None = True
     version_id: str | None = None
     created_at: int | None = None
@@ -57,9 +59,8 @@ class PromptModel(BaseModel):
     model_config = ConfigDict(from_attributes=True)  # allows ORM model binding
 
 
-# --- form / schema definitions ---
+# Form / schema definitions
 # Forms
-####################
 
 
 class PromptUserResponse(PromptModel):
@@ -86,8 +87,8 @@ class PromptForm(BaseModel):
     content: str
     data: dict | None = None
     meta: dict | None = None
-    tags: list[str | None] = None
-    access_grants: list[dict | None] = None
+    tags: list[str] | None = None
+    access_grants: list[dict] | None = None
     version_id: str | None = None  # Active version
     commit_message: str | None = None  # For history tracking
     is_production: bool | None = True  # Whether to set new version as production
@@ -100,7 +101,7 @@ class PromptsTable:
     async def _to_prompt_model(
         self,
         prompt: Prompt,
-        access_grants: list[AccessGrantModel | None] = None,
+        access_grants: list[AccessGrantModel] | None = None,
         db: AsyncSession | None = None,
     ) -> PromptModel:
         prompt_model = PromptModel.model_validate(prompt)
@@ -194,7 +195,7 @@ class PromptsTable:
             if match is None:
                 return
             return await self._to_prompt_model(match, db=session)
-        # --- context manager always returns above ---
+        # Context manager always returns above
         return
 
     async def get_prompts(self, db: AsyncSession | None = None) -> list[PromptUserResponse]:
@@ -241,7 +242,7 @@ class PromptsTable:
         self, user_id: str, permission: str = 'write', db: AsyncSession | None = None
     ) -> list[PromptUserResponse]:
         async with get_async_db_context(db) as session:
-            user_groups = await Groups.get_groups_by_member_id(user_id, db=session)
+            user_groups = await Groups.get_groups_by_member_id(user_id, db=session, include_inherited=True)
             user_group_ids = [group.id for group in user_groups]
 
             query = select(Prompt).filter(Prompt.is_active == True).order_by(Prompt.updated_at.desc())
@@ -334,8 +335,9 @@ class PromptsTable:
                     tag_lower = tag.lower()
 
                     if dialect_name == 'sqlite':
+                        tag_lower = tag.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
                         tag_clause = text(
-                            'EXISTS (SELECT 1 FROM json_each(prompt.tags) t WHERE LOWER(t.value) = :tag_val)'
+                            "EXISTS (SELECT 1 FROM json_each(prompt.tags) t WHERE t.value LIKE :tag_val ESCAPE '\\')"
                         )
                     elif dialect_name == 'postgresql':
                         tag_clause = text(
@@ -345,7 +347,10 @@ class PromptsTable:
                         # Fallback for dialects with no JSON array function: LIKE on the text.
                         tags_text = func.lower(cast(Prompt.tags, String))
                         tag_clause = or_(
-                            *(tags_text.like(f'%"{variant}"%') for variant in json_text_variants(tag_lower))
+                            *(
+                                tags_text.contains(f'"{variant}"', autoescape=True)
+                                for variant in json_text_variants(tag_lower)
+                            )
                         )
                         tag_lower = None
 
@@ -430,11 +435,7 @@ class PromptsTable:
                 current_access_grants = await self._get_access_grants(prompt.id, db=session)
 
                 # Check if content changed to decide on history creation
-                content_changed = (
-                    prompt.name != form_data.name
-                    or prompt.content != form_data.content
-                    or form_data.access_grants is not None
-                )
+                content_changed = prompt.name != form_data.name or prompt.content != form_data.content
 
                 # Update prompt fields
                 prompt.name = form_data.name
@@ -442,10 +443,6 @@ class PromptsTable:
                 prompt.data = form_data.data or prompt.data
                 prompt.meta = form_data.meta or prompt.meta
                 prompt.updated_at = int(time.time())
-                if form_data.access_grants is not None:
-                    await AccessGrants.set_access_grants('prompt', prompt.id, form_data.access_grants, db=session)
-                    current_access_grants = await self._get_access_grants(prompt.id, db=session)
-
                 await session.commit()
 
                 # Create history entry only if content changed
@@ -500,23 +497,20 @@ class PromptsTable:
                     prompt.name != form_data.name
                     or prompt.command != form_data.command
                     or prompt.content != form_data.content
-                    or form_data.access_grants is not None
                     or (form_data.tags is not None and prompt.tags != form_data.tags)
                 )
 
                 # Update prompt fields
-                prompt.name = form_data.name
                 prompt.command = form_data.command
-                prompt.content = form_data.content
-                prompt.data = form_data.data or prompt.data
-                prompt.meta = form_data.meta or prompt.meta
 
-                if form_data.tags is not None:
-                    prompt.tags = form_data.tags
+                if form_data.is_production:
+                    prompt.name = form_data.name
+                    prompt.content = form_data.content
+                    prompt.data = form_data.data or prompt.data
+                    prompt.meta = form_data.meta or prompt.meta
 
-                if form_data.access_grants is not None:
-                    await AccessGrants.set_access_grants('prompt', prompt.id, form_data.access_grants, db=session)
-                    current_access_grants = await self._get_access_grants(prompt.id, db=session)
+                    if form_data.tags is not None:
+                        prompt.tags = form_data.tags
 
                 prompt.updated_at = int(time.time())
 
@@ -530,7 +524,7 @@ class PromptsTable:
                         'command': prompt.command,
                         'data': form_data.data or {},
                         'meta': form_data.meta or {},
-                        'tags': prompt.tags or [],
+                        'tags': form_data.tags if form_data.tags is not None else (prompt.tags or []),
                         'access_grants': [grant.model_dump() for grant in current_access_grants],
                     }
 
@@ -557,7 +551,7 @@ class PromptsTable:
         prompt_id: str,
         name: str,
         command: str,
-        tags: list[str | None] = None,
+        tags: list[str] | None = None,
         db: AsyncSession | None = None,
     ) -> PromptModel | None:
         """Update only name, command, and tags (no history created)."""
@@ -651,8 +645,10 @@ class PromptsTable:
                     await PromptHistories.delete_history_by_prompt_id(prompt.id, db=session)
                     await AccessGrants.revoke_all_access('prompt', prompt.id, db=session)
 
+                    recipients = await delete_resource_comments('prompt', [prompt.id], db=session)
                     await session.delete(prompt)
                     await session.commit()
+                    await emit_changes(recipients)
                     return True
                 return False
         except Exception:
@@ -668,8 +664,10 @@ class PromptsTable:
                     await PromptHistories.delete_history_by_prompt_id(prompt.id, db=session)
                     await AccessGrants.revoke_all_access('prompt', prompt.id, db=session)
 
+                    recipients = await delete_resource_comments('prompt', [prompt.id], db=session)
                     await session.delete(prompt)
                     await session.commit()
+                    await emit_changes(recipients)
                     return True
                 return False
         except Exception as err:
@@ -693,7 +691,7 @@ class PromptsTable:
     async def get_tags_by_user_id(self, user_id: str, db: AsyncSession | None = None) -> list[str]:
         try:
             async with get_async_db_context(db) as session:
-                user_groups = await Groups.get_groups_by_member_id(user_id, db=session)
+                user_groups = await Groups.get_groups_by_member_id(user_id, db=session, include_inherited=True)
                 user_group_ids = [group.id for group in user_groups]
 
                 query = select(Prompt.tags).filter(Prompt.is_active == True)

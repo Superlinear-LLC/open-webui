@@ -1,18 +1,26 @@
 <script>
-	import { onDestroy, onMount, tick, getContext } from 'svelte';
-	const i18n = getContext('i18n');
-
-	import Markdown from './Markdown.svelte';
-	import StructuredOutputRenderer from './StructuredOutputRenderer.svelte';
 	import {
+		commentSurface,
+		contentHash,
+		commentSelectionDraft,
+		selectedComment
+	} from '$lib/components/comments/anchors';
+	import {
+		config,
+		user,
 		artifactCode,
 		chatId as currentChatId,
 		mobile,
 		settings,
 		showArtifacts,
-		showControls,
+		showTabs,
 		showEmbeds
 	} from '$lib/stores';
+	import { onDestroy, onMount, tick, getContext } from 'svelte';
+	const i18n = getContext('i18n');
+
+	import Markdown from './Markdown.svelte';
+	import StructuredOutputRenderer from './StructuredOutputRenderer.svelte';
 	import FloatingButtons from '../ContentRenderer/FloatingButtons.svelte';
 	import { createMessagesList, replaceOutsideCode } from '$lib/utils';
 
@@ -89,6 +97,7 @@
 
 	export let editCodeBlock = true;
 	export let topPadding = false;
+	export let allowEmbeds = false;
 
 	export let onSave = (e) => {};
 	export let onSourceClick = (e) => {};
@@ -96,14 +105,21 @@
 	export let onToolCallResolved = (e) => {};
 	export let onSetInputText = (text) => {};
 
+	/** @type {HTMLDivElement | undefined} */
 	let contentContainerElement;
+	/** @type {{ closeHandler: () => void } | undefined} */
 	let floatingButtonsElement;
+	/** @type {Range | null} */
+	let floatingButtonsRange = null;
+	let selectedText = '';
+	let usingFloatingButtons = false;
 
 	let sourceIds = [];
 	$: getSourceIds(sources);
 
 	const getSourceIds = (sources) => {
 		const result = [];
+		const seenIds = new Set();
 		for (const source of sources ?? []) {
 			for (let index = 0; index < (source.document ?? []).length; index++) {
 				if (model?.info?.meta?.capabilities?.citations == false) {
@@ -111,7 +127,11 @@
 					continue;
 				}
 				const metadata = source.metadata?.[index];
-				const id = metadata?.source ?? 'N/A';
+				const id = metadata?.source ?? source?.source?.id ?? 'N/A';
+				if (seenIds.has(id)) {
+					continue;
+				}
+				seenIds.add(id);
 				if (metadata?.name) {
 					result.push(metadata.name);
 				} else if (id.startsWith('http://') || id.startsWith('https://')) {
@@ -121,7 +141,7 @@
 				}
 			}
 		}
-		sourceIds = [...new Set(result)];
+		sourceIds = result;
 	};
 
 	/** @param {string} messageContent */
@@ -133,6 +153,8 @@
 			: messageContent;
 
 	let autoOpenedArtifactIds = new Set();
+	/** @type {ReturnType<typeof selectedComment>} */
+	let commentSelection = null;
 
 	const hasClosingCodeFence = (raw = '') => /(?:^|\n)```[ \t]*$/.test(raw.trimEnd());
 
@@ -160,7 +182,7 @@
 				autoOpenedArtifactIds.add(artifactId);
 				await tick();
 				showArtifacts.set(true);
-				showControls.set(true);
+				showTabs.set(true);
 			}
 		}
 	);
@@ -169,68 +191,47 @@
 		async (/** @type {string} */ value) => {
 			console.log('Preview', value);
 			await artifactCode.set(/** @type {any} */ (value));
-			await showControls.set(true);
+			await showTabs.set(true);
 			await showArtifacts.set(true);
 			await showEmbeds.set(false);
 		}
 	);
 
-	const updateButtonPosition = (event) => {
-		const buttonsContainerElement = document.getElementById(`floating-buttons-${id}`);
+	const updateSelection = () => {
+		if (usingFloatingButtons) return;
+		const selection = window.getSelection();
+		const range = selection?.rangeCount ? selection.getRangeAt(0) : null;
 		if (
-			!contentContainerElement?.contains(event.target) &&
-			!buttonsContainerElement?.contains(event.target)
+			!selection ||
+			!range ||
+			!selection.toString().trim() ||
+			!contentContainerElement?.contains(range.startContainer) ||
+			!contentContainerElement.contains(range.endContainer)
 		) {
 			closeFloatingButtons();
 			return;
 		}
+		floatingButtonsElement?.closeHandler();
+		selectedText = selection.toString();
+		floatingButtonsRange = range.cloneRange();
+		commentSelection = $config?.features?.enable_comments && $user ? selectedComment() : null;
+	};
 
-		setTimeout(async () => {
-			await tick();
-
-			if (!contentContainerElement?.contains(event.target)) return;
-
-			let selection = window.getSelection();
-
-			if (selection.toString().trim().length > 0) {
-				const range = selection.getRangeAt(0);
-				const rect = range.getBoundingClientRect();
-
-				const parentRect = contentContainerElement.getBoundingClientRect();
-
-				// Adjust based on parent rect
-				const top = rect.bottom - parentRect.top;
-				const left = rect.left - parentRect.left;
-
-				if (buttonsContainerElement) {
-					buttonsContainerElement.style.display = 'block';
-
-					// Calculate space available on the right
-					const spaceOnRight = parentRect.width - left;
-					let halfScreenWidth = $mobile ? window.innerWidth / 2 : window.innerWidth / 3;
-
-					if (spaceOnRight < halfScreenWidth) {
-						const right = parentRect.right - rect.right;
-						buttonsContainerElement.style.right = `${right}px`;
-						buttonsContainerElement.style.left = 'auto'; // Reset left
-					} else {
-						// Enough space, position using 'left'
-						buttonsContainerElement.style.left = `${left}px`;
-						buttonsContainerElement.style.right = 'auto'; // Reset right
-					}
-					buttonsContainerElement.style.top = `${top + 5}px`; // +5 to add some spacing
-				}
-			} else {
-				closeFloatingButtons();
-			}
-		}, 0);
+	/** @param {Event} event */
+	const toolbarInteractionHandler = (event) => {
+		if (!(event.target instanceof Node)) return;
+		const toolbar = document.getElementById(`floating-buttons-${id}`);
+		// Keep the snapshot while a touch focuses an action or its question input.
+		usingFloatingButtons = !!toolbar?.contains(event.target);
+		if (!usingFloatingButtons && !contentContainerElement?.contains(event.target)) {
+			closeFloatingButtons();
+		}
 	};
 
 	const closeFloatingButtons = () => {
-		const buttonsContainerElement = document.getElementById(`floating-buttons-${id}`);
-		if (buttonsContainerElement) {
-			buttonsContainerElement.style.display = 'none';
-		}
+		commentSelection = null;
+		floatingButtonsRange = null;
+		selectedText = '';
 
 		if (floatingButtonsElement) {
 			// check if closeHandler is defined
@@ -254,8 +255,9 @@
 
 	function attachListeners() {
 		if (!listenersAttached && contentContainerElement) {
-			contentContainerElement.addEventListener('mouseup', updateButtonPosition);
-			document.addEventListener('mouseup', updateButtonPosition);
+			document.addEventListener('selectionchange', updateSelection);
+			document.addEventListener('pointerdown', toolbarInteractionHandler, true);
+			document.addEventListener('focusin', toolbarInteractionHandler, true);
 			document.addEventListener('keydown', keydownHandler);
 			listenersAttached = true;
 		}
@@ -263,8 +265,9 @@
 
 	function detachListeners() {
 		if (listenersAttached) {
-			contentContainerElement?.removeEventListener('mouseup', updateButtonPosition);
-			document.removeEventListener('mouseup', updateButtonPosition);
+			document.removeEventListener('selectionchange', updateSelection);
+			document.removeEventListener('pointerdown', toolbarInteractionHandler, true);
+			document.removeEventListener('focusin', toolbarInteractionHandler, true);
 			document.removeEventListener('keydown', keydownHandler);
 			listenersAttached = false;
 		}
@@ -284,6 +287,7 @@
 <div bind:this={contentContainerElement}>
 	{#if output?.length}
 		<StructuredOutputRenderer
+			commentToolbarId={floatingButtons ? `floating-buttons-${id}` : undefined}
 			{id}
 			{chatId}
 			{messageId}
@@ -293,6 +297,7 @@
 			{preview}
 			{compactPreview}
 			{done}
+			{allowEmbeds}
 			{editCodeBlock}
 			{topPadding}
 			{sourceIds}
@@ -306,7 +311,19 @@
 			onPreview={previewHandler}
 		/>
 	{:else if $settings?.renderMarkdownInAssistantMessages ?? true}
-		<div class="markdown-prose">
+		<div
+			class="markdown-prose"
+			use:commentSurface={{
+				resource_type: 'chat',
+				resource_id: chatId,
+				target_type: 'chat_message',
+				target_id: messageId,
+				surface_id: 'content',
+				content_hash: contentHash(content ?? ''),
+				enabled: done && !compactPreview && !!chatId,
+				toolbar_id: floatingButtons ? `floating-buttons-${id}` : undefined
+			}}
+		>
 			<Markdown
 				{id}
 				{chatId}
@@ -317,6 +334,7 @@
 				{preview}
 				{compactPreview}
 				{done}
+				{allowEmbeds}
 				{editCodeBlock}
 				{topPadding}
 				{sourceIds}
@@ -343,12 +361,27 @@
 					{preview}
 					{compactPreview}
 					{done}
+					{allowEmbeds}
 					{onToolCallResolved}
 				/>
 			</div>
 		{/if}
 		{#if extracted.plainContent}
-			<div class="whitespace-pre-wrap text-[0.9375rem]">{extracted.plainContent}</div>
+			<div
+				class="whitespace-pre-wrap text-[0.9375rem]"
+				use:commentSurface={{
+					resource_type: 'chat',
+					resource_id: chatId,
+					target_type: 'chat_message',
+					target_id: messageId,
+					surface_id: 'content',
+					content_hash: contentHash(content ?? ''),
+					enabled: done && !compactPreview && !!chatId,
+					toolbar_id: floatingButtons ? `floating-buttons-${id}` : undefined
+				}}
+			>
+				{extracted.plainContent}
+			</div>
 		{/if}
 	{/if}
 </div>
@@ -356,8 +389,18 @@
 {#if floatingButtons}
 	<FloatingButtons
 		bind:this={floatingButtonsElement}
+		range={floatingButtonsRange}
+		{selectedText}
 		{id}
 		actions={$settings?.floatingActionButtons ?? []}
+		onComment={commentSelection
+			? () => {
+					if (!commentSelection) return;
+					commentSelectionDraft.set(commentSelection);
+					window.getSelection()?.removeAllRanges();
+					closeFloatingButtons();
+				}
+			: null}
 		onSetInputText={(text) => {
 			onSetInputText(text);
 			closeFloatingButtons();

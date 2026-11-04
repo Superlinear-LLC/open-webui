@@ -1,10 +1,18 @@
 <script lang="ts">
-	import { config, settings, user } from '$lib/stores';
+	import {
+		canRegenerateResponses,
+		canUseCalls,
+		canUseChannels,
+		canUseTemporaryChats,
+		canUseWebSearch,
+		isSettingsAdmin
+	} from '$lib/utils/settings-access';
+	import { config, settings, terminalServers, user, visibleControls } from '$lib/stores';
 	import { onMount, getContext } from 'svelte';
 	import { toast } from 'svelte-sonner';
 	import { updateUserInfo } from '$lib/apis/users';
 	import { getUserPosition } from '$lib/utils';
-	import { setTextScale } from '$lib/utils/text-scale';
+	import { normalizeAppFontFamily, setAppFontFamily, setTextScale } from '$lib/utils/text-scale';
 
 	import Minus from '$lib/components/icons/Minus.svelte';
 	import Plus from '$lib/components/icons/Plus.svelte';
@@ -21,6 +29,18 @@
 	$: currentSettings = (settingsValue ?? $settings ?? {}) as Record<string, any>;
 	$: externalSettings = settingsValue !== null;
 	$: defaultSettings = ($config?.ui?.default_interface_settings ?? {}) as Record<string, any>;
+	$: hasDirectToolServerAccess =
+		$user?.role === 'admin' || ($user?.permissions?.features?.direct_tool_servers ?? true);
+	$: hasDirectTerminal =
+		($terminalServers ?? []).some((server) => !server.id) ||
+		(currentSettings?.terminalServers ?? []).some((server) => server.url);
+	// Defaults apply to every user, so they follow what the instance offers.
+	$: hasTerminal =
+		$config?.features?.enable_tool_servers &&
+		(($terminalServers ?? []).some((server) => server.id) ||
+			(externalSettings
+				? $config?.features?.enable_direct_integrations
+				: hasDirectToolServerAccess && hasDirectTerminal));
 
 	let backgroundImageUrl: string | null = null;
 	let inputFiles: FileList | null = null;
@@ -41,7 +61,6 @@
 	let userLocation = false;
 
 	// Interface
-	let defaultModelId = '';
 	let showUsername = false;
 
 	let highContrastMode = false;
@@ -115,15 +134,19 @@
 	let showManageImageCompressionModal = false;
 
 	let textScale: number | null = null;
+	let fontFamily: string | null = null;
+	let fontFamilyInput = '';
 	let showTextScaleSlider = false;
-	const settingRowClass = 'flex items-center justify-between gap-2.5';
-	const settingLabelClass = 'min-w-0 text-xs text-gray-600 dark:text-gray-400';
+	let showFontFamilyInput = false;
+	const settingRowClass = 'group/setting-row flex items-center justify-between gap-2.5';
+	const settingLabelClass =
+		'min-w-0 text-xs text-gray-600 group-has-[button[id$=-control]:enabled]/setting-row:cursor-pointer group-has-[button[id$=-control]:disabled]/setting-row:cursor-not-allowed transition-colors duration-150 group-hover/setting-row:text-gray-900 group-focus-within/setting-row:text-gray-900 dark:text-gray-400 dark:group-hover/setting-row:text-white dark:group-focus-within/setting-row:text-white';
 	const settingControlClass = 'flex shrink-0 items-center justify-end gap-1.5';
-	const sectionHeadingClass = 'mt-4 text-xs text-gray-400 dark:text-gray-600';
-	const firstSectionHeadingClass = 'text-xs text-gray-400 dark:text-gray-600';
-	const settingDescriptionClass = 'mt-1.5 text-[0.6875rem] text-gray-400 dark:text-gray-600';
+	const sectionHeadingClass = 'mt-4 text-xs text-gray-600 dark:text-gray-500';
+	const firstSectionHeadingClass = 'text-xs text-gray-600 dark:text-gray-500';
+	const settingDescriptionClass = 'mt-1.5 text-[0.6875rem] text-gray-600 dark:text-gray-500';
 	const actionButtonClass =
-		'text-xs text-gray-500 transition-colors hover:text-gray-900 dark:text-gray-500 dark:hover:text-white';
+		'text-xs text-gray-600 transition-colors hover:text-gray-900 dark:text-gray-400 dark:hover:text-white';
 
 	const hasSettingPath = (source: Record<string, any>, path: string) => {
 		let current: any = source;
@@ -234,9 +257,19 @@
 	};
 
 	export const save = async () => {
+		const normalizedFontFamily = normalizeAppFontFamily(fontFamilyInput) || null;
+		fontFamily = normalizedFontFamily;
+		fontFamilyInput = normalizedFontFamily ?? '';
+
+		if (!externalSettings) {
+			setAppFontFamily(fontFamily || defaultFontFamily());
+		}
+
 		saveSettings({
-			models: [defaultModelId],
-			imageCompressionSize: imageCompressionSize
+			...(isDefaultSetting('imageCompressionSize') ? {} : { imageCompressionSize }),
+			...(isDefaultSetting('fontFamily') && fontFamily === defaultFontFamily()
+				? {}
+				: { fontFamily })
 		});
 	};
 
@@ -253,6 +286,51 @@
 		}
 
 		saveSettings({ textScale });
+	};
+
+	const defaultFontFamily = () => normalizeAppFontFamily(defaultSettings.fontFamily) || null;
+
+	const previewFontFamily = (value: string) => {
+		fontFamilyInput = value;
+		fontFamily = normalizeAppFontFamily(value) || null;
+
+		if (!externalSettings) {
+			setAppFontFamily(fontFamily || defaultFontFamily());
+		}
+	};
+
+	const setFontFamilyHandler = (value: string | null) => {
+		const normalized = normalizeAppFontFamily(value);
+		fontFamily = normalized || null;
+		fontFamilyInput = normalized;
+
+		if (!externalSettings) {
+			setAppFontFamily(fontFamily || defaultFontFamily());
+		}
+
+		saveSettings({ fontFamily });
+	};
+
+	const toggleFontFamilyInput = () => {
+		if (!showFontFamilyInput && (fontFamily === null || isDefaultSetting('fontFamily'))) {
+			fontFamily = fontFamily ?? defaultFontFamily();
+			fontFamilyInput = fontFamily ?? '';
+			showFontFamilyInput = true;
+
+			if (!externalSettings) {
+				setAppFontFamily(fontFamily);
+			}
+		} else {
+			showFontFamilyInput = false;
+			fontFamily = null;
+			fontFamilyInput = '';
+
+			if (!externalSettings) {
+				setAppFontFamily(defaultFontFamily());
+			}
+
+			saveSettings({ fontFamily });
+		}
 	};
 
 	const init = () => {
@@ -329,16 +407,14 @@
 		imageCompressionSize = currentSettings?.imageCompressionSize ?? { width: '', height: '' };
 		imageCompressionInChannels = currentSettings?.imageCompressionInChannels ?? true;
 
-		defaultModelId = currentSettings?.models?.at(0) ?? '';
-		if ($config?.default_models) {
-			defaultModelId = $config.default_models.split(',')[0];
-		}
-
 		backgroundImageUrl = currentSettings?.backgroundImageUrl ?? null;
 		webSearch = currentSettings?.webSearch ?? null;
 
 		textScale = currentSettings?.textScale ?? null;
+		fontFamily = normalizeAppFontFamily(currentSettings?.fontFamily) || null;
+		fontFamilyInput = fontFamily ?? '';
 		showTextScaleSlider = false;
+		showFontFamilyInput = false;
 
 		defaultUploadContext = currentSettings?.defaultUploadContext ?? 'focused';
 	};
@@ -398,16 +474,19 @@
 />
 
 <div class="flex flex-col gap-2.5">
-	<h3 class={firstSectionHeadingClass}>{$i18n.t('UI')}</h3>
+	<h3 class={firstSectionHeadingClass}>
+		{$i18n.t('settings.personal.interface.sections.ui.title')}
+	</h3>
 
 	<div>
 		<div class={settingRowClass}>
-			<label id="ui-scale-label" class={settingLabelClass} for="ui-scale-slider">
-				{$i18n.t('UI Scale')}
+			<label id="ui-scale-label" class={settingLabelClass} for="ui-scale-label-control">
+				{$i18n.t('settings.personal.interface.uiScale.label')}
 			</label>
 
 			<div class={settingControlClass}>
 				<button
+					id="ui-scale-label-control"
 					class={actionButtonClass}
 					aria-live="polite"
 					type="button"
@@ -444,7 +523,7 @@
 						setTextScaleHandler(textScale);
 					}}
 					aria-labelledby="ui-scale-label"
-					aria-label={$i18n.t('Decrease UI Scale')}
+					aria-label={$i18n.t('settings.personal.interface.decreaseUiScale.label')}
 				>
 					<Minus className="h-3.5 w-3.5" />
 				</button>
@@ -477,7 +556,7 @@
 						setTextScaleHandler(textScale);
 					}}
 					aria-labelledby="ui-scale-label"
-					aria-label={$i18n.t('Increase UI Scale')}
+					aria-label={$i18n.t('settings.personal.interface.increaseUiScale.label')}
 				>
 					<Plus className="h-3.5 w-3.5" />
 				</button>
@@ -490,13 +569,59 @@
 
 	<div>
 		<div class={settingRowClass}>
-			<div id="high-contrast-mode-label" class={settingLabelClass}>
-				{$i18n.t('High Contrast Mode')}
+			<label id="font-family-label" class={settingLabelClass} for="font-family-label-control">
+				{$i18n.t('settings.personal.interface.fontFamily.label')}
+			</label>
+
+			<div class={settingControlClass}>
+				<button
+					id="font-family-label-control"
+					class={actionButtonClass}
+					aria-labelledby="font-family-label font-family-state"
+					type="button"
+					on:click={toggleFontFamilyInput}
+				>
+					<span id="font-family-state">
+						{!showFontFamilyInput && (fontFamily === null || isDefaultSetting('fontFamily'))
+							? $i18n.t('Default')
+							: $i18n.t('Custom')}
+					</span>
+				</button>
 			</div>
+		</div>
+
+		{#if showFontFamilyInput || (fontFamily !== null && !isDefaultSetting('fontFamily'))}
+			<div class="mt-1.5 flex items-center pb-1">
+				<input
+					id="font-family-input"
+					aria-labelledby="font-family-label"
+					class="h-7 w-full rounded-lg border border-gray-100/50 bg-gray-50/40 px-2 text-xs text-gray-700 outline-hidden transition-colors placeholder:text-gray-600 focus:border-blue-400 dark:border-white/[0.04] dark:bg-white/[0.03] dark:text-gray-300 dark:placeholder:text-gray-500 dark:focus:border-blue-500"
+					type="text"
+					placeholder="Aptos"
+					bind:value={fontFamilyInput}
+					on:input={(event) => previewFontFamily(event.currentTarget.value)}
+					on:change={(event) => setFontFamilyHandler(event.currentTarget.value)}
+				/>
+			</div>
+		{/if}
+		<p class={settingDescriptionClass}>
+			{$i18n.t('settings.personal.interface.fontFamily.description')}
+		</p>
+	</div>
+
+	<div>
+		<div class={settingRowClass}>
+			<label
+				id="accessibility-mode-label"
+				class={settingLabelClass}
+				for="accessibility-mode-label-control"
+			>
+				{$i18n.t('settings.personal.interface.accessibilityMode.label')}
+			</label>
 
 			<div class={settingControlClass}>
 				<Switch
-					ariaLabelledbyId="high-contrast-mode-label"
+					ariaLabelledbyId="accessibility-mode-label"
 					tooltip={true}
 					bind:state={highContrastMode}
 					inherited={isDefaultSetting('highContrastMode')}
@@ -507,15 +632,19 @@
 			</div>
 		</div>
 		<p class={settingDescriptionClass}>
-			{$i18n.t('Enable accessibility-focused visual enhancements.')}
+			{$i18n.t('settings.personal.interface.accessibilityMode.description')}
 		</p>
 	</div>
 
 	<div>
 		<div class={settingRowClass}>
-			<div id="use-chat-title-as-tab-title-label" class={settingLabelClass}>
-				{$i18n.t('Display Chat Title in Tab')}
-			</div>
+			<label
+				id="use-chat-title-as-tab-title-label"
+				class={settingLabelClass}
+				for="use-chat-title-as-tab-title-label-control"
+			>
+				{$i18n.t('settings.personal.interface.displayChatTitleInTab.label')}
+			</label>
 
 			<div class={settingControlClass}>
 				<Switch
@@ -530,36 +659,50 @@
 			</div>
 		</div>
 		<p class={settingDescriptionClass}>
-			{$i18n.t('Use the active chat title as the browser tab title.')}
+			{$i18n.t('settings.personal.interface.displayChatTitleInTab.description')}
 		</p>
 	</div>
 
-	<div>
-		<div id="allow-user-location-label" class={settingRowClass}>
-			<div class={settingLabelClass}>{$i18n.t('Allow User Location')}</div>
+	{#if $visibleControls['settings.user_location']}
+		<div>
+			<div class={settingRowClass}>
+				<label
+					id="allow-user-location-label"
+					class={settingLabelClass}
+					for="allow-user-location-label-control"
+				>
+					{$i18n.t('settings.personal.interface.allowUserLocation.label')}
+				</label>
 
-			<div class={settingControlClass}>
-				<Switch
-					ariaLabelledbyId="allow-user-location-label"
-					tooltip={true}
-					bind:state={userLocation}
-					inherited={isDefaultSetting('userLocation')}
-					on:change={() => {
-						toggleUserLocation();
-					}}
-				/>
+				<div class={settingControlClass}>
+					<Switch
+						ariaLabelledbyId="allow-user-location-label"
+						tooltip={true}
+						bind:state={userLocation}
+						inherited={isDefaultSetting('userLocation')}
+						on:change={() => {
+							toggleUserLocation();
+						}}
+					/>
+				</div>
 			</div>
+			<p class={settingDescriptionClass}>
+				{$i18n.t('settings.personal.interface.allowUserLocation.description')}
+			</p>
 		</div>
-		<p class={settingDescriptionClass}>
-			{$i18n.t('Share your current location with features that can use it.')}
-		</p>
-	</div>
+	{/if}
 
 	<div>
 		<div class={settingRowClass}>
-			<div id="haptic-feedback-label" class={settingLabelClass}>
-				{$i18n.t('Haptic Feedback')} ({$i18n.t('Android')})
-			</div>
+			<label
+				id="haptic-feedback-label"
+				class={settingLabelClass}
+				for="haptic-feedback-label-control"
+			>
+				{$i18n.t('settings.personal.interface.hapticFeedback.label')} ({$i18n.t(
+					'settings.personal.interface.android.label'
+				)})
+			</label>
 
 			<div class={settingControlClass}>
 				<Switch
@@ -580,9 +723,9 @@
 
 	<div>
 		<div class={settingRowClass}>
-			<div id="copy-formatted-label" class={settingLabelClass}>
-				{$i18n.t('Copy Formatted Text')}
-			</div>
+			<label id="copy-formatted-label" class={settingLabelClass} for="copy-formatted-label-control">
+				{$i18n.t('settings.personal.interface.copyFormattedText.label')}
+			</label>
 
 			<div class={settingControlClass}>
 				<Switch
@@ -597,16 +740,20 @@
 			</div>
 		</div>
 		<p class={settingDescriptionClass}>
-			{$i18n.t('Copy rich formatted content instead of plain text.')}
+			{$i18n.t('settings.personal.interface.copyFormattedText.description')}
 		</p>
 	</div>
 
-	{#if $user?.role === 'admin'}
+	{#if isSettingsAdmin({ user: $user, config: $config })}
 		<div>
 			<div class={settingRowClass}>
-				<div id="toast-notifications-label" class={settingLabelClass}>
-					{$i18n.t('Toast Notifications for New Updates')}
-				</div>
+				<label
+					id="toast-notifications-label"
+					class={settingLabelClass}
+					for="toast-notifications-label-control"
+				>
+					{$i18n.t('settings.personal.interface.toastNotificationsForNewUpdates.label')}
+				</label>
 
 				<div class={settingControlClass}>
 					<Switch
@@ -621,15 +768,15 @@
 				</div>
 			</div>
 			<p class={settingDescriptionClass}>
-				{$i18n.t('Show update toasts to admins when new versions are available.')}
+				{$i18n.t('settings.personal.interface.toastNotificationsForNewUpdates.description')}
 			</p>
 		</div>
 
 		<div>
 			<div class={settingRowClass}>
-				<div id="whats-new-label" class={settingLabelClass}>
+				<label id="whats-new-label" class={settingLabelClass} for="whats-new-label-control">
 					{$i18n.t(`Show "What's New" Modal on Login`)}
-				</div>
+				</label>
 
 				<div class={settingControlClass}>
 					<Switch
@@ -649,13 +796,19 @@
 		</div>
 	{/if}
 
-	<div class={sectionHeadingClass}>{$i18n.t('Chat')}</div>
+	<div class={sectionHeadingClass}>
+		{$i18n.t('settings.personal.interface.sections.chat.title')}
+	</div>
 
 	<div>
 		<div class={settingRowClass}>
-			<div id="enable-message-queue-label" class={settingLabelClass}>
-				{$i18n.t('Enable Message Queue')}
-			</div>
+			<label
+				id="enable-message-queue-label"
+				class={settingLabelClass}
+				for="enable-message-queue-label-control"
+			>
+				{$i18n.t('settings.personal.interface.enableMessageQueue.label')}
+			</label>
 
 			<div class={settingControlClass}>
 				<Switch
@@ -670,17 +823,18 @@
 			</div>
 		</div>
 		<p class={settingDescriptionClass}>
-			{$i18n.t('Queue outgoing messages instead of interrupting active responses.')}
+			{$i18n.t('settings.personal.interface.enableMessageQueue.description')}
 		</p>
 	</div>
 
 	<div>
 		<div class={settingRowClass}>
-			<div id="chat-direction-label" class={settingLabelClass}>
-				{$i18n.t('Chat Direction')}
-			</div>
+			<label id="chat-direction-label" class={settingLabelClass} for="chat-direction-label-control">
+				{$i18n.t('settings.personal.interface.chatDirection.label')}
+			</label>
 
 			<button
+				id="chat-direction-label-control"
 				aria-labelledby="chat-direction-label chat-direction-mode"
 				class={actionButtonClass}
 				on:click={toggleChangeChatDirection}
@@ -696,17 +850,22 @@
 			</button>
 		</div>
 		<p class={settingDescriptionClass}>
-			{$i18n.t('Choose automatic, left-to-right, or right-to-left text flow.')}
+			{$i18n.t('settings.personal.interface.chatDirection.description')}
 		</p>
 	</div>
 
 	<div>
 		<div class={settingRowClass}>
-			<div id="landing-page-mode-label" class={settingLabelClass}>
-				{$i18n.t('Landing Page Mode')}
-			</div>
+			<label
+				id="landing-page-mode-label"
+				class={settingLabelClass}
+				for="landing-page-mode-label-control"
+			>
+				{$i18n.t('settings.personal.interface.landingPageMode.label')}
+			</label>
 
 			<button
+				id="landing-page-mode-label-control"
 				aria-labelledby="landing-page-mode-label notification-sound-state"
 				class={actionButtonClass}
 				on:click={() => {
@@ -715,22 +874,29 @@
 				type="button"
 			>
 				<span id="notification-sound-state"
-					>{landingPageMode === '' ? $i18n.t('Default') : $i18n.t('Chat')}</span
+					>{landingPageMode === ''
+						? $i18n.t('Default')
+						: $i18n.t('settings.personal.interface.sections.chat.title')}</span
 				>
 			</button>
 		</div>
 		<p class={settingDescriptionClass}>
-			{$i18n.t('Choose whether the app opens to the default home or chat view.')}
+			{$i18n.t('settings.personal.interface.landingPageMode.description')}
 		</p>
 	</div>
 
 	<div>
 		<div class={settingRowClass}>
-			<div id="chat-background-label" class={settingLabelClass}>
-				{$i18n.t('Chat Background Image')}
-			</div>
+			<label
+				id="chat-background-label"
+				class={settingLabelClass}
+				for="chat-background-label-control"
+			>
+				{$i18n.t('settings.personal.interface.chatBackgroundImage.label')}
+			</label>
 
 			<button
+				id="chat-background-label-control"
 				aria-labelledby="chat-background-label background-image-url-state"
 				class={actionButtonClass}
 				on:click={() => {
@@ -749,39 +915,49 @@
 			</button>
 		</div>
 		<p class={settingDescriptionClass}>
-			{$i18n.t('Upload or reset the image shown behind chat content.')}
+			{$i18n.t('settings.personal.interface.chatBackgroundImage.description')}
 		</p>
 	</div>
 
-	<div>
-		<div class={settingRowClass}>
-			<div id="chat-bubble-ui-label" class={settingLabelClass}>
-				{$i18n.t('Chat Bubble UI')}
-			</div>
+	{#if $visibleControls['settings.chat_bubble']}
+		<div>
+			<div class={settingRowClass}>
+				<label
+					id="chat-bubble-ui-label"
+					class={settingLabelClass}
+					for="chat-bubble-ui-label-control"
+				>
+					{$i18n.t('settings.personal.interface.chatBubbleUi.label')}
+				</label>
 
-			<div class={settingControlClass}>
-				<Switch
-					tooltip={true}
-					ariaLabelledbyId="chat-bubble-ui-label"
-					bind:state={chatBubble}
-					inherited={isDefaultSetting('chatBubble')}
-					on:change={() => {
-						saveSettings({ chatBubble });
-					}}
-				/>
+				<div class={settingControlClass}>
+					<Switch
+						tooltip={true}
+						ariaLabelledbyId="chat-bubble-ui-label"
+						bind:state={chatBubble}
+						inherited={isDefaultSetting('chatBubble')}
+						on:change={() => {
+							saveSettings({ chatBubble });
+						}}
+					/>
+				</div>
 			</div>
+			<p class={settingDescriptionClass}>
+				{$i18n.t('settings.personal.interface.chatBubbleUi.description')}
+			</p>
 		</div>
-		<p class={settingDescriptionClass}>
-			{$i18n.t('Render messages in compact bubble containers.')}
-		</p>
-	</div>
+	{/if}
 
 	{#if !chatBubble}
 		<div>
 			<div class={settingRowClass}>
-				<div id="chat-bubble-username-label" class={settingLabelClass}>
-					{$i18n.t('Display the Username Instead of You in the Chat')}
-				</div>
+				<label
+					id="chat-bubble-username-label"
+					class={settingLabelClass}
+					for="chat-bubble-username-label-control"
+				>
+					{$i18n.t('settings.personal.interface.displayTheUsernameInsteadOfYouInTheChat.label')}
+				</label>
 
 				<div class={settingControlClass}>
 					<Switch
@@ -796,40 +972,50 @@
 				</div>
 			</div>
 			<p class={settingDescriptionClass}>
-				{$i18n.t('Show your username label instead of You in chat bubbles.')}
+				{$i18n.t('settings.personal.interface.displayTheUsernameInsteadOfYouInTheChat.description')}
 			</p>
 		</div>
 	{/if}
 
-	<div>
-		<div class={settingRowClass}>
-			<div id="widescreen-mode-label" class={settingLabelClass}>
-				{$i18n.t('Widescreen Mode')}
-			</div>
-
-			<div class={settingControlClass}>
-				<Switch
-					ariaLabelledbyId="widescreen-mode-label"
-					tooltip={true}
-					bind:state={widescreenMode}
-					inherited={isDefaultSetting('widescreenMode')}
-					on:change={() => {
-						saveSettings({ widescreenMode });
-					}}
-				/>
-			</div>
-		</div>
-		<p class={settingDescriptionClass}>
-			{$i18n.t('Use a wider chat layout on large displays.')}
-		</p>
-	</div>
-
-	{#if $user?.role === 'admin' || $user?.permissions?.chat?.temporary}
+	{#if $visibleControls['settings.widescreen']}
 		<div>
 			<div class={settingRowClass}>
-				<div id="temp-chat-default-label" class={settingLabelClass}>
-					{$i18n.t('Temporary Chat by Default')}
+				<label
+					id="widescreen-mode-label"
+					class={settingLabelClass}
+					for="widescreen-mode-label-control"
+				>
+					{$i18n.t('settings.personal.interface.widescreenMode.label')}
+				</label>
+
+				<div class={settingControlClass}>
+					<Switch
+						ariaLabelledbyId="widescreen-mode-label"
+						tooltip={true}
+						bind:state={widescreenMode}
+						inherited={isDefaultSetting('widescreenMode')}
+						on:change={() => {
+							saveSettings({ widescreenMode });
+						}}
+					/>
 				</div>
+			</div>
+			<p class={settingDescriptionClass}>
+				{$i18n.t('settings.personal.interface.widescreenMode.description')}
+			</p>
+		</div>
+	{/if}
+
+	{#if canUseTemporaryChats({ user: $user, config: $config })}
+		<div>
+			<div class={settingRowClass}>
+				<label
+					id="temp-chat-default-label"
+					class={settingLabelClass}
+					for="temp-chat-default-label-control"
+				>
+					{$i18n.t('settings.personal.interface.temporaryChatByDefault.label')}
+				</label>
 
 				<div class={settingControlClass}>
 					<Switch
@@ -844,16 +1030,16 @@
 				</div>
 			</div>
 			<p class={settingDescriptionClass}>
-				{$i18n.t('Start new chats as temporary unless changed.')}
+				{$i18n.t('settings.personal.interface.temporaryChatByDefault.description')}
 			</p>
 		</div>
 	{/if}
 
 	<div>
 		<div class={settingRowClass}>
-			<div id="fade-streaming-label" class={settingLabelClass}>
-				{$i18n.t('Fade Effect for Streaming Text')}
-			</div>
+			<label id="fade-streaming-label" class={settingLabelClass} for="fade-streaming-label-control">
+				{$i18n.t('settings.personal.interface.fadeEffectForStreamingText.label')}
+			</label>
 
 			<div class={settingControlClass}>
 				<Switch
@@ -868,15 +1054,19 @@
 			</div>
 		</div>
 		<p class={settingDescriptionClass}>
-			{$i18n.t('Fade streaming text as it arrives.')}
+			{$i18n.t('settings.personal.interface.fadeEffectForStreamingText.description')}
 		</p>
 	</div>
 
 	<div>
 		<div class={settingRowClass}>
-			<div id="render-markdown-user-label" class={settingLabelClass}>
-				{$i18n.t('Render Markdown in User Messages')}
-			</div>
+			<label
+				id="render-markdown-user-label"
+				class={settingLabelClass}
+				for="render-markdown-user-label-control"
+			>
+				{$i18n.t('settings.personal.interface.renderMarkdownInUserMessages.label')}
+			</label>
 
 			<div class={settingControlClass}>
 				<Switch
@@ -891,15 +1081,19 @@
 			</div>
 		</div>
 		<p class={settingDescriptionClass}>
-			{$i18n.t('Format Markdown syntax in your own messages.')}
+			{$i18n.t('settings.personal.interface.renderMarkdownInUserMessages.description')}
 		</p>
 	</div>
 
 	<div>
 		<div class={settingRowClass}>
-			<div id="render-markdown-assistant-label" class={settingLabelClass}>
-				{$i18n.t('Render Markdown in Assistant Messages')}
-			</div>
+			<label
+				id="render-markdown-assistant-label"
+				class={settingLabelClass}
+				for="render-markdown-assistant-label-control"
+			>
+				{$i18n.t('settings.personal.interface.renderMarkdownInAssistantMessages.label')}
+			</label>
 
 			<div class={settingControlClass}>
 				<Switch
@@ -914,15 +1108,19 @@
 			</div>
 		</div>
 		<p class={settingDescriptionClass}>
-			{$i18n.t('Format Markdown syntax in assistant responses.')}
+			{$i18n.t('settings.personal.interface.renderMarkdownInAssistantMessages.description')}
 		</p>
 	</div>
 
 	<div>
 		<div class={settingRowClass}>
-			<div id="render-markdown-in-previews-label" class={settingLabelClass}>
-				{$i18n.t('Render Markdown in Previews')}
-			</div>
+			<label
+				id="render-markdown-in-previews-label"
+				class={settingLabelClass}
+				for="render-markdown-in-previews-label-control"
+			>
+				{$i18n.t('settings.personal.interface.renderMarkdownInPreviews.label')}
+			</label>
 
 			<div class={settingControlClass}>
 				<Switch
@@ -937,84 +1135,98 @@
 			</div>
 		</div>
 		<p class={settingDescriptionClass}>
-			{$i18n.t('Format Markdown in previews and compact content surfaces.')}
+			{$i18n.t('settings.personal.interface.renderMarkdownInPreviews.description')}
 		</p>
 	</div>
 
-	<div>
-		<div class={settingRowClass}>
-			<div id="auto-generation-label" class={settingLabelClass}>
-				{$i18n.t('Title Auto-Generation')}
-			</div>
+	{#if $config?.features?.enable_title_generation}
+		<div>
+			<div class={settingRowClass}>
+				<label
+					id="auto-generation-label"
+					class={settingLabelClass}
+					for="auto-generation-label-control"
+				>
+					{$i18n.t('settings.personal.interface.titleAutoGeneration.label')}
+				</label>
 
-			<div class={settingControlClass}>
-				<Switch
-					ariaLabelledbyId="auto-generation-label"
-					tooltip={true}
-					bind:state={titleAutoGenerate}
-					inherited={isDefaultSetting('titleAutoGenerate')}
-					on:change={() => {
-						toggleTitleAutoGenerate();
-					}}
-				/>
+				<div class={settingControlClass}>
+					<Switch
+						ariaLabelledbyId="auto-generation-label"
+						tooltip={true}
+						bind:state={titleAutoGenerate}
+						inherited={isDefaultSetting('titleAutoGenerate')}
+						on:change={() => {
+							toggleTitleAutoGenerate();
+						}}
+					/>
+				</div>
 			</div>
+			<p class={settingDescriptionClass}>
+				{$i18n.t('settings.personal.interface.titleAutoGeneration.description')}
+			</p>
 		</div>
-		<p class={settingDescriptionClass}>
-			{$i18n.t('Generate chat titles automatically from conversation content.')}
-		</p>
-	</div>
+	{/if}
 
-	<div>
-		<div class={settingRowClass}>
-			<div class={settingLabelClass} id="follow-up-auto-generation-label">
-				{$i18n.t('Follow-Up Auto-Generation')}
-			</div>
+	{#if $config?.features?.enable_follow_up_generation}
+		<div>
+			<div class={settingRowClass}>
+				<label
+					class={settingLabelClass}
+					id="follow-up-auto-generation-label"
+					for="follow-up-auto-generation-label-control"
+				>
+					{$i18n.t('settings.personal.interface.followUpAutoGeneration.label')}
+				</label>
 
-			<div class={settingControlClass}>
-				<Switch
-					ariaLabelledbyId="follow-up-auto-generation-label"
-					tooltip={true}
-					bind:state={autoFollowUps}
-					inherited={isDefaultSetting('autoFollowUps')}
-					on:change={() => {
-						saveSettings({ autoFollowUps });
-					}}
-				/>
+				<div class={settingControlClass}>
+					<Switch
+						ariaLabelledbyId="follow-up-auto-generation-label"
+						tooltip={true}
+						bind:state={autoFollowUps}
+						inherited={isDefaultSetting('autoFollowUps')}
+						on:change={() => {
+							saveSettings({ autoFollowUps });
+						}}
+					/>
+				</div>
 			</div>
+			<p class={settingDescriptionClass}>
+				{$i18n.t('settings.personal.interface.followUpAutoGeneration.description')}
+			</p>
 		</div>
-		<p class={settingDescriptionClass}>
-			{$i18n.t('Generate suggested follow-up prompts after responses.')}
-		</p>
-	</div>
+	{/if}
 
-	<div>
-		<div class={settingRowClass}>
-			<div id="chat-tags-label" class={settingLabelClass}>
-				{$i18n.t('Chat Tags Auto-Generation')}
-			</div>
+	{#if $config?.features?.enable_tags_generation}
+		<div>
+			<div class={settingRowClass}>
+				<label id="chat-tags-label" class={settingLabelClass} for="chat-tags-label-control">
+					{$i18n.t('settings.personal.interface.chatTagsAutoGeneration.label')}
+				</label>
 
-			<div class={settingControlClass}>
-				<Switch
-					ariaLabelledbyId="chat-tags-label"
-					tooltip={true}
-					bind:state={autoTags}
-					inherited={isDefaultSetting('autoTags')}
-					on:change={() => {
-						saveSettings({ autoTags });
-					}}
-				/>
+				<div class={settingControlClass}>
+					<Switch
+						ariaLabelledbyId="chat-tags-label"
+						tooltip={true}
+						bind:state={autoTags}
+						inherited={isDefaultSetting('autoTags')}
+						on:change={() => {
+							saveSettings({ autoTags });
+						}}
+					/>
+				</div>
 			</div>
+			<p class={settingDescriptionClass}>
+				{$i18n.t('settings.personal.interface.chatTagsAutoGeneration.description')}
+			</p>
 		</div>
-		<p class={settingDescriptionClass}>
-			{$i18n.t('Generate tags for chats automatically.')}
-		</p>
-	</div>
+	{/if}
 
 	<div>
 		<div class={settingRowClass}>
-			<div id="auto-copy-label" class={settingLabelClass}>
-				{$i18n.t('Auto-Copy Response to Clipboard')}
-			</div>
+			<label id="auto-copy-label" class={settingLabelClass} for="auto-copy-label-control">
+				{$i18n.t('settings.personal.interface.autoCopyResponseToClipboard.label')}
+			</label>
 
 			<div class={settingControlClass}>
 				<Switch
@@ -1029,15 +1241,19 @@
 			</div>
 		</div>
 		<p class={settingDescriptionClass}>
-			{$i18n.t('Copy the latest assistant response when it completes.')}
+			{$i18n.t('settings.personal.interface.autoCopyResponseToClipboard.description')}
 		</p>
 	</div>
 
 	<div>
 		<div class={settingRowClass}>
-			<div id="response-auto-scroll-label" class={settingLabelClass}>
-				{$i18n.t('Response Auto-Scroll')}
-			</div>
+			<label
+				id="response-auto-scroll-label"
+				class={settingLabelClass}
+				for="response-auto-scroll-label-control"
+			>
+				{$i18n.t('settings.personal.interface.responseAutoScroll.label')}
+			</label>
 
 			<div class={settingControlClass}>
 				<Switch
@@ -1052,15 +1268,19 @@
 			</div>
 		</div>
 		<p class={settingDescriptionClass}>
-			{$i18n.t('Follow assistant responses as they are generated.')}
+			{$i18n.t('settings.personal.interface.responseAutoScroll.description')}
 		</p>
 	</div>
 
 	<div>
 		<div class={settingRowClass}>
-			<div id="scroll-on-branch-change-label" class={settingLabelClass}>
-				{$i18n.t('Scroll On Branch Change')}
-			</div>
+			<label
+				id="scroll-on-branch-change-label"
+				class={settingLabelClass}
+				for="scroll-on-branch-change-label-control"
+			>
+				{$i18n.t('settings.personal.interface.scrollOnBranchChange.label')}
+			</label>
 
 			<div class={settingControlClass}>
 				<Switch
@@ -1075,15 +1295,19 @@
 			</div>
 		</div>
 		<p class={settingDescriptionClass}>
-			{$i18n.t('Scroll to the active branch when switching response branches.')}
+			{$i18n.t('settings.personal.interface.scrollOnBranchChange.description')}
 		</p>
 	</div>
 
 	<div>
 		<div class={settingRowClass}>
-			<div id="insert-suggestion-prompt-label" class={settingLabelClass}>
-				{$i18n.t('Insert Suggestion Prompt to Input')}
-			</div>
+			<label
+				id="insert-suggestion-prompt-label"
+				class={settingLabelClass}
+				for="insert-suggestion-prompt-label-control"
+			>
+				{$i18n.t('settings.personal.interface.insertSuggestionPromptToInput.label')}
+			</label>
 
 			<div class={settingControlClass}>
 				<Switch
@@ -1098,15 +1322,19 @@
 			</div>
 		</div>
 		<p class={settingDescriptionClass}>
-			{$i18n.t('Place selected suggestion text into the composer.')}
+			{$i18n.t('settings.personal.interface.insertSuggestionPromptToInput.description')}
 		</p>
 	</div>
 
 	<div>
 		<div class={settingRowClass}>
-			<div id="keep-follow-up-prompts-label" class={settingLabelClass}>
-				{$i18n.t('Keep Follow-Up Prompts in Chat')}
-			</div>
+			<label
+				id="keep-follow-up-prompts-label"
+				class={settingLabelClass}
+				for="keep-follow-up-prompts-label-control"
+			>
+				{$i18n.t('settings.personal.interface.keepFollowUpPromptsInChat.label')}
+			</label>
 
 			<div class={settingControlClass}>
 				<Switch
@@ -1121,15 +1349,19 @@
 			</div>
 		</div>
 		<p class={settingDescriptionClass}>
-			{$i18n.t('Keep generated follow-up prompts visible in the chat.')}
+			{$i18n.t('settings.personal.interface.keepFollowUpPromptsInChat.description')}
 		</p>
 	</div>
 
 	<div>
 		<div class={settingRowClass}>
-			<div id="insert-follow-up-prompt-label" class={settingLabelClass}>
-				{$i18n.t('Insert Follow-Up Prompt to Input')}
-			</div>
+			<label
+				id="insert-follow-up-prompt-label"
+				class={settingLabelClass}
+				for="insert-follow-up-prompt-label-control"
+			>
+				{$i18n.t('settings.personal.interface.insertFollowUpPromptToInput.label')}
+			</label>
 
 			<div class={settingControlClass}>
 				<Switch
@@ -1144,38 +1376,48 @@
 			</div>
 		</div>
 		<p class={settingDescriptionClass}>
-			{$i18n.t('Insert selected follow-up prompts directly into the composer.')}
+			{$i18n.t('settings.personal.interface.insertFollowUpPromptToInput.description')}
 		</p>
 	</div>
 
-	<div>
-		<div class={settingRowClass}>
-			<div id="regenerate-menu-label" class={settingLabelClass}>
-				{$i18n.t('Regenerate Menu')}
-			</div>
+	{#if canRegenerateResponses({ user: $user, config: $config })}
+		<div>
+			<div class={settingRowClass}>
+				<label
+					id="regenerate-menu-label"
+					class={settingLabelClass}
+					for="regenerate-menu-label-control"
+				>
+					{$i18n.t('settings.personal.interface.regenerateMenu.label')}
+				</label>
 
-			<div class={settingControlClass}>
-				<Switch
-					ariaLabelledbyId="regenerate-menu-label"
-					tooltip={true}
-					bind:state={regenerateMenu}
-					inherited={isDefaultSetting('regenerateMenu')}
-					on:change={() => {
-						saveSettings({ regenerateMenu });
-					}}
-				/>
+				<div class={settingControlClass}>
+					<Switch
+						ariaLabelledbyId="regenerate-menu-label"
+						tooltip={true}
+						bind:state={regenerateMenu}
+						inherited={isDefaultSetting('regenerateMenu')}
+						on:change={() => {
+							saveSettings({ regenerateMenu });
+						}}
+					/>
+				</div>
 			</div>
+			<p class={settingDescriptionClass}>
+				{$i18n.t('settings.personal.interface.regenerateMenu.description')}
+			</p>
 		</div>
-		<p class={settingDescriptionClass}>
-			{$i18n.t('Show the regenerate action menu for assistant responses.')}
-		</p>
-	</div>
+	{/if}
 
 	<div>
 		<div class={settingRowClass}>
-			<div id="always-collapse-label" class={settingLabelClass}>
-				{$i18n.t('Always Collapse Code Blocks')}
-			</div>
+			<label
+				id="always-collapse-label"
+				class={settingLabelClass}
+				for="always-collapse-label-control"
+			>
+				{$i18n.t('settings.personal.interface.alwaysCollapseCodeBlocks.label')}
+			</label>
 
 			<div class={settingControlClass}>
 				<Switch
@@ -1190,15 +1432,15 @@
 			</div>
 		</div>
 		<p class={settingDescriptionClass}>
-			{$i18n.t('Collapse code blocks by default.')}
+			{$i18n.t('settings.personal.interface.alwaysCollapseCodeBlocks.description')}
 		</p>
 	</div>
 
 	<div>
 		<div class={settingRowClass}>
-			<div id="always-expand-label" class={settingLabelClass}>
-				{$i18n.t('Always Expand Details')}
-			</div>
+			<label id="always-expand-label" class={settingLabelClass} for="always-expand-label-control">
+				{$i18n.t('settings.personal.interface.alwaysExpandDetails.label')}
+			</label>
 
 			<div class={settingControlClass}>
 				<Switch
@@ -1213,15 +1455,19 @@
 			</div>
 		</div>
 		<p class={settingDescriptionClass}>
-			{$i18n.t('Open detail blocks by default.')}
+			{$i18n.t('settings.personal.interface.alwaysExpandDetails.description')}
 		</p>
 	</div>
 
 	<div>
 		<div class={settingRowClass}>
-			<div id="chat-hover-preview-label" class={settingLabelClass}>
-				{$i18n.t('Chat Hover Previews')}
-			</div>
+			<label
+				id="chat-hover-preview-label"
+				class={settingLabelClass}
+				for="chat-hover-preview-label-control"
+			>
+				{$i18n.t('settings.personal.interface.chatHoverPreviews.label')}
+			</label>
 
 			<div class={settingControlClass}>
 				<Switch
@@ -1236,15 +1482,19 @@
 			</div>
 		</div>
 		<p class={settingDescriptionClass}>
-			{$i18n.t('Show a floating preview of recent messages when hovering a chat in the sidebar.')}
+			{$i18n.t('settings.personal.interface.chatHoverPreviews.description')}
 		</p>
 	</div>
 
 	<div>
 		<div class={settingRowClass}>
-			<div id="keep-followup-prompts-label" class={settingLabelClass}>
-				{$i18n.t('Display Multi-model Responses in Tabs')}
-			</div>
+			<label
+				id="keep-followup-prompts-label"
+				class={settingLabelClass}
+				for="keep-followup-prompts-label-control"
+			>
+				{$i18n.t('settings.personal.interface.displayMultiModelResponsesInTabs.label')}
+			</label>
 
 			<div class={settingControlClass}>
 				<Switch
@@ -1259,86 +1509,105 @@
 			</div>
 		</div>
 		<p class={settingDescriptionClass}>
-			{$i18n.t('Group multi-model responses into tabs.')}
+			{$i18n.t('settings.personal.interface.displayMultiModelResponsesInTabs.description')}
 		</p>
 	</div>
 
+	{#if hasTerminal}
+		<div>
+			<div class={settingRowClass}>
+				<label
+					id="terminal-file-display-label"
+					class={settingLabelClass}
+					for="terminal-file-display-label-control"
+				>
+					{$i18n.t('settings.personal.interface.terminalFileDisplay.label')}
+				</label>
+
+				<button
+					id="terminal-file-display-label-control"
+					aria-labelledby="terminal-file-display-label terminal-file-display-state"
+					class={actionButtonClass}
+					on:click={() => {
+						terminalFileDisplay = terminalFileDisplay === 'inline' ? 'sidebar' : 'inline';
+						saveSettings({ terminalFileDisplay });
+					}}
+					type="button"
+				>
+					<span id="terminal-file-display-state">
+						{terminalFileDisplay === 'inline' ? $i18n.t('Inline') : $i18n.t('Sidebar')}
+					</span>
+				</button>
+			</div>
+			<p class={settingDescriptionClass}>
+				{$i18n.t('settings.personal.interface.terminalFileDisplay.description')}
+			</p>
+		</div>
+
+		<div>
+			<div class={settingRowClass}>
+				<label
+					id="show-files-on-terminal-select-label"
+					class={settingLabelClass}
+					for="show-files-on-terminal-select-label-control"
+				>
+					{$i18n.t('settings.personal.interface.showFilesOnTerminalSelect.label')}
+				</label>
+
+				<div class={settingControlClass}>
+					<Switch
+						ariaLabelledbyId="show-files-on-terminal-select-label"
+						tooltip={true}
+						bind:state={showFilesOnTerminalSelect}
+						inherited={isDefaultSetting('showFilesOnTerminalSelect')}
+						on:change={() => {
+							saveSettings({ showFilesOnTerminalSelect });
+						}}
+					/>
+				</div>
+			</div>
+			<p class={settingDescriptionClass}>
+				{$i18n.t('settings.personal.interface.showFilesOnTerminalSelect.description')}
+			</p>
+		</div>
+
+		<div>
+			<div class={settingRowClass}>
+				<label
+					id="terminal-preview-allow-same-origin-label"
+					class={settingLabelClass}
+					for="terminal-preview-allow-same-origin-label-control"
+				>
+					{$i18n.t('settings.personal.interface.terminalPreviewAllowSameOrigin.label')}
+				</label>
+
+				<div class={settingControlClass}>
+					<Switch
+						ariaLabelledbyId="terminal-preview-allow-same-origin-label"
+						tooltip={true}
+						bind:state={terminalPreviewAllowSameOrigin}
+						inherited={isDefaultSetting('terminalPreviewAllowSameOrigin')}
+						on:change={() => {
+							saveSettings({ terminalPreviewAllowSameOrigin });
+						}}
+					/>
+				</div>
+			</div>
+			<p class={settingDescriptionClass}>
+				{$i18n.t('settings.personal.interface.terminalPreviewAllowSameOrigin.description')}
+			</p>
+		</div>
+	{/if}
+
 	<div>
 		<div class={settingRowClass}>
-			<div id="terminal-file-display-label" class={settingLabelClass}>
-				{$i18n.t('Terminal File Display')}
-			</div>
-
-			<button
-				aria-labelledby="terminal-file-display-label terminal-file-display-state"
-				class={actionButtonClass}
-				on:click={() => {
-					terminalFileDisplay = terminalFileDisplay === 'inline' ? 'sidebar' : 'inline';
-					saveSettings({ terminalFileDisplay });
-				}}
-				type="button"
+			<label
+				id="stylized-pdf-export-label"
+				class={settingLabelClass}
+				for="stylized-pdf-export-label-control"
 			>
-				<span id="terminal-file-display-state">
-					{terminalFileDisplay === 'inline' ? $i18n.t('Inline') : $i18n.t('Sidebar')}
-				</span>
-			</button>
-		</div>
-		<p class={settingDescriptionClass}>
-			{$i18n.t('Choose where terminal display_file results appear by default.')}
-		</p>
-	</div>
-
-	<div>
-		<div class={settingRowClass}>
-			<div id="show-files-on-terminal-select-label" class={settingLabelClass}>
-				{$i18n.t('Show Files on Terminal Select')}
-			</div>
-
-			<div class={settingControlClass}>
-				<Switch
-					ariaLabelledbyId="show-files-on-terminal-select-label"
-					tooltip={true}
-					bind:state={showFilesOnTerminalSelect}
-					inherited={isDefaultSetting('showFilesOnTerminalSelect')}
-					on:change={() => {
-						saveSettings({ showFilesOnTerminalSelect });
-					}}
-				/>
-			</div>
-		</div>
-		<p class={settingDescriptionClass}>
-			{$i18n.t('Open the file browser after selecting a terminal.')}
-		</p>
-	</div>
-
-	<div>
-		<div class={settingRowClass}>
-			<div id="terminal-preview-allow-same-origin-label" class={settingLabelClass}>
-				{$i18n.t('Terminal Preview Allow Same Origin')}
-			</div>
-
-			<div class={settingControlClass}>
-				<Switch
-					ariaLabelledbyId="terminal-preview-allow-same-origin-label"
-					tooltip={true}
-					bind:state={terminalPreviewAllowSameOrigin}
-					inherited={isDefaultSetting('terminalPreviewAllowSameOrigin')}
-					on:change={() => {
-						saveSettings({ terminalPreviewAllowSameOrigin });
-					}}
-				/>
-			</div>
-		</div>
-		<p class={settingDescriptionClass}>
-			{$i18n.t('Allow terminal previews to access same-origin browser APIs.')}
-		</p>
-	</div>
-
-	<div>
-		<div class={settingRowClass}>
-			<div id="stylized-pdf-export-label" class={settingLabelClass}>
-				{$i18n.t('Stylized PDF Export')}
-			</div>
+				{$i18n.t('settings.personal.interface.stylizedPdfExport.label')}
+			</label>
 
 			<div class={settingControlClass}>
 				<Switch
@@ -1353,79 +1622,101 @@
 			</div>
 		</div>
 		<p class={settingDescriptionClass}>
-			{$i18n.t('Use styled formatting when exporting chats to PDF.')}
+			{$i18n.t('settings.personal.interface.stylizedPdfExport.description')}
 		</p>
 	</div>
 
-	<div>
-		<div class={settingRowClass}>
-			<div id="floating-action-buttons-label" class={settingLabelClass}>
-				{$i18n.t('Floating Quick Actions')}
-			</div>
-
-			<div class={settingControlClass}>
-				{#if showFloatingActionButtons}
-					<button
-						class={actionButtonClass}
-						type="button"
-						aria-label={$i18n.t('Open Modal To Manage Floating Quick Actions')}
-						on:click={() => {
-							showManageFloatingActionButtonsModal = true;
-						}}
-					>
-						{$i18n.t('Manage')}
-					</button>
-				{/if}
-
-				<Switch
-					ariaLabelledbyId="floating-action-buttons-label"
-					tooltip={true}
-					bind:state={showFloatingActionButtons}
-					inherited={isDefaultSetting('showFloatingActionButtons')}
-					on:change={() => {
-						saveSettings({ showFloatingActionButtons });
-					}}
-				/>
-			</div>
-		</div>
-		<p class={settingDescriptionClass}>
-			{$i18n.t('Show the floating quick-action toolbar in chat.')}
-		</p>
-	</div>
-
-	<div>
-		<div class={settingRowClass}>
-			<div id="web-search-in-chat-label" class={settingLabelClass}>
-				{$i18n.t('Web Search in Chat')}
-			</div>
-
-			<button
-				aria-labelledby="web-search-in-chat-label web-search-state"
-				class={actionButtonClass}
-				on:click={() => {
-					toggleWebSearch();
-				}}
-				type="button"
-			>
-				<span id="web-search-state"
-					>{webSearch === 'always' ? $i18n.t('Always') : $i18n.t('Default')}</span
+	{#if $visibleControls['settings.floating_action_buttons']}
+		<div>
+			<div class={settingRowClass}>
+				<label
+					id="floating-action-buttons-label"
+					class={settingLabelClass}
+					for="floating-action-buttons-label-control"
 				>
-			</button>
-		</div>
-		<p class={settingDescriptionClass}>
-			{$i18n.t('Set web search availability for new chats.')}
-		</p>
-	</div>
+					{$i18n.t('settings.personal.interface.floatingQuickActions.label')}
+				</label>
 
-	<div class={sectionHeadingClass}>{$i18n.t('Input')}</div>
+				<div class={settingControlClass}>
+					{#if showFloatingActionButtons}
+						<button
+							class={actionButtonClass}
+							type="button"
+							aria-label={$i18n.t(
+								'settings.personal.interface.openModalToManageFloatingQuickActions.label'
+							)}
+							on:click={() => {
+								showManageFloatingActionButtonsModal = true;
+							}}
+						>
+							{$i18n.t('Manage')}
+						</button>
+					{/if}
+
+					<Switch
+						ariaLabelledbyId="floating-action-buttons-label"
+						tooltip={true}
+						bind:state={showFloatingActionButtons}
+						inherited={isDefaultSetting('showFloatingActionButtons')}
+						on:change={() => {
+							saveSettings({ showFloatingActionButtons });
+						}}
+					/>
+				</div>
+			</div>
+			<p class={settingDescriptionClass}>
+				{$i18n.t('Show the floating quick-action toolbar in chat.')}
+			</p>
+		</div>
+	{/if}
+
+	{#if canUseWebSearch({ user: $user, config: $config })}
+		<div>
+			<div class={settingRowClass}>
+				<label
+					id="web-search-in-chat-label"
+					class={settingLabelClass}
+					for="web-search-in-chat-label-control"
+				>
+					{$i18n.t('settings.personal.interface.webSearchInChat.label')}
+				</label>
+
+				<button
+					id="web-search-in-chat-label-control"
+					aria-labelledby="web-search-in-chat-label web-search-state"
+					class={actionButtonClass}
+					on:click={() => {
+						toggleWebSearch();
+					}}
+					type="button"
+				>
+					<span id="web-search-state"
+						>{webSearch === 'always' ? $i18n.t('Always') : $i18n.t('Default')}</span
+					>
+				</button>
+			</div>
+			<p class={settingDescriptionClass}>
+				{$i18n.t('settings.personal.interface.webSearchInChat.description')}
+			</p>
+		</div>
+	{/if}
+
+	<div class={sectionHeadingClass}>
+		{$i18n.t('settings.personal.interface.sections.input.title')}
+	</div>
 
 	<div>
 		<div class={settingRowClass}>
-			<div id="enter-key-behavior-label ctrl-enter-to-send-state" class={settingLabelClass}>
-				{$i18n.t('Enter Key Behavior')}
-			</div>
+			<label
+				id="enter-key-behavior-label"
+				class={settingLabelClass}
+				for="enter-key-behavior-label-control"
+			>
+				{$i18n.t('settings.personal.interface.enterKeyBehavior.label')}
+			</label>
 
 			<button
+				id="enter-key-behavior-label-control"
 				aria-labelledby="enter-key-behavior-label"
 				class={actionButtonClass}
 				on:click={() => {
@@ -1441,39 +1732,45 @@
 			</button>
 		</div>
 		<p class={settingDescriptionClass}>
-			{$i18n.t('Choose whether Enter sends immediately or uses Ctrl+Enter.')}
+			{$i18n.t('settings.personal.interface.enterKeyBehavior.description')}
 		</p>
 	</div>
 
-	<div>
-		<div class={settingRowClass}>
-			<div id="rich-input-label" class={settingLabelClass}>
-				{$i18n.t('Rich Text Input for Chat')}
-			</div>
+	{#if $visibleControls['settings.rich_text_input']}
+		<div>
+			<div class={settingRowClass}>
+				<label id="rich-input-label" class={settingLabelClass} for="rich-input-label-control">
+					{$i18n.t('settings.personal.interface.richTextInputForChat.label')}
+				</label>
 
-			<div class={settingControlClass}>
-				<Switch
-					tooltip={true}
-					ariaLabelledbyId="rich-input-label"
-					bind:state={richTextInput}
-					inherited={isDefaultSetting('richTextInput')}
-					on:change={() => {
-						saveSettings({ richTextInput });
-					}}
-				/>
+				<div class={settingControlClass}>
+					<Switch
+						tooltip={true}
+						ariaLabelledbyId="rich-input-label"
+						bind:state={richTextInput}
+						inherited={isDefaultSetting('richTextInput')}
+						on:change={() => {
+							saveSettings({ richTextInput });
+						}}
+					/>
+				</div>
 			</div>
+			<p class={settingDescriptionClass}>
+				{$i18n.t('settings.personal.interface.richTextInputForChat.description')}
+			</p>
 		</div>
-		<p class={settingDescriptionClass}>
-			{$i18n.t('Use the rich composer instead of a plain textarea.')}
-		</p>
-	</div>
+	{/if}
 
 	{#if $config?.features?.enable_autocomplete_generation}
 		<div>
 			<div class={settingRowClass}>
-				<div id="prompt-autocompletion-label" class={settingLabelClass}>
-					{$i18n.t('Prompt Autocompletion')}
-				</div>
+				<label
+					id="prompt-autocompletion-label"
+					class={settingLabelClass}
+					for="prompt-autocompletion-label-control"
+				>
+					{$i18n.t('settings.personal.interface.promptAutocompletion.label')}
+				</label>
 
 				<div class={settingControlClass}>
 					<Switch
@@ -1488,7 +1785,7 @@
 				</div>
 			</div>
 			<p class={settingDescriptionClass}>
-				{$i18n.t('Suggest completions while composing prompts.')}
+				{$i18n.t('settings.personal.interface.promptAutocompletion.description')}
 			</p>
 		</div>
 	{/if}
@@ -1496,9 +1793,13 @@
 	{#if richTextInput}
 		<div>
 			<div class={settingRowClass}>
-				<div id="show-formatting-toolbar-label" class={settingLabelClass}>
-					{$i18n.t('Show Formatting Toolbar')}
-				</div>
+				<label
+					id="show-formatting-toolbar-label"
+					class={settingLabelClass}
+					for="show-formatting-toolbar-label-control"
+				>
+					{$i18n.t('settings.personal.interface.showFormattingToolbar.label')}
+				</label>
 
 				<div class={settingControlClass}>
 					<Switch
@@ -1513,15 +1814,19 @@
 				</div>
 			</div>
 			<p class={settingDescriptionClass}>
-				{$i18n.t('Show formatting controls in the rich text composer.')}
+				{$i18n.t('settings.personal.interface.showFormattingToolbar.description')}
 			</p>
 		</div>
 
 		<div>
 			<div class={settingRowClass}>
-				<div id="insert-prompt-as-rich-text-label" class={settingLabelClass}>
-					{$i18n.t('Insert Prompt as Rich Text')}
-				</div>
+				<label
+					id="insert-prompt-as-rich-text-label"
+					class={settingLabelClass}
+					for="insert-prompt-as-rich-text-label-control"
+				>
+					{$i18n.t('settings.personal.interface.insertPromptAsRichText.label')}
+				</label>
 
 				<div class={settingControlClass}>
 					<Switch
@@ -1536,208 +1841,257 @@
 				</div>
 			</div>
 			<p class={settingDescriptionClass}>
-				{$i18n.t('Paste inserted prompts as rich text when possible.')}
+				{$i18n.t('settings.personal.interface.insertPromptAsRichText.description')}
 			</p>
 		</div>
 	{/if}
 
-	<div>
-		<div class={settingRowClass}>
-			<div id="paste-large-label" class={settingLabelClass}>
-				{$i18n.t('Paste Large Text as File')}
-			</div>
+	{#if $visibleControls['settings.large_text_as_file']}
+		<div>
+			<div class={settingRowClass}>
+				<label id="paste-large-label" class={settingLabelClass} for="paste-large-label-control">
+					{$i18n.t('settings.personal.interface.pasteLargeTextAsFile.label')}
+				</label>
 
-			<div class={settingControlClass}>
-				<Switch
-					tooltip={true}
-					ariaLabelledbyId="paste-large-label"
-					bind:state={largeTextAsFile}
-					inherited={isDefaultSetting('largeTextAsFile')}
-					on:change={() => {
-						saveSettings({ largeTextAsFile });
-					}}
-				/>
+				<div class={settingControlClass}>
+					<Switch
+						tooltip={true}
+						ariaLabelledbyId="paste-large-label"
+						bind:state={largeTextAsFile}
+						inherited={isDefaultSetting('largeTextAsFile')}
+						on:change={() => {
+							saveSettings({ largeTextAsFile });
+						}}
+					/>
+				</div>
 			</div>
+			<p class={settingDescriptionClass}>
+				{$i18n.t('settings.personal.interface.pasteLargeTextAsFile.description')}
+			</p>
 		</div>
-		<p class={settingDescriptionClass}>
-			{$i18n.t('Convert long pasted text into a file attachment.')}
-		</p>
+	{/if}
+
+	<div class={sectionHeadingClass}>
+		{$i18n.t('settings.personal.interface.sections.artifacts.title')}
 	</div>
 
-	<div class={sectionHeadingClass}>{$i18n.t('Artifacts')}</div>
+	{#if $visibleControls['settings.detect_artifacts']}
+		<div>
+			<div class={settingRowClass}>
+				<label
+					id="detect-artifacts-label"
+					class={settingLabelClass}
+					for="detect-artifacts-label-control"
+				>
+					{$i18n.t('settings.personal.interface.detectArtifactsAutomatically.label')}
+				</label>
 
-	<div>
-		<div class={settingRowClass}>
-			<div id="detect-artifacts-label" class={settingLabelClass}>
-				{$i18n.t('Detect Artifacts Automatically')}
+				<div class={settingControlClass}>
+					<Switch
+						ariaLabelledbyId="detect-artifacts-label"
+						tooltip={true}
+						bind:state={detectArtifacts}
+						inherited={isDefaultSetting('detectArtifacts')}
+						on:change={() => {
+							saveSettings({ detectArtifacts });
+						}}
+					/>
+				</div>
 			</div>
-
-			<div class={settingControlClass}>
-				<Switch
-					ariaLabelledbyId="detect-artifacts-label"
-					tooltip={true}
-					bind:state={detectArtifacts}
-					inherited={isDefaultSetting('detectArtifacts')}
-					on:change={() => {
-						saveSettings({ detectArtifacts });
-					}}
-				/>
-			</div>
+			<p class={settingDescriptionClass}>
+				{$i18n.t('settings.personal.interface.detectArtifactsAutomatically.description')}
+			</p>
 		</div>
-		<p class={settingDescriptionClass}>
-			{$i18n.t('Detect generated artifacts and show them in the artifact workspace.')}
-		</p>
+	{/if}
+
+	{#if $visibleControls['settings.iframe_sandbox_allow_scripts']}
+		<div>
+			<div class={settingRowClass}>
+				<label
+					id="iframe-sandbox-allow-scripts-label"
+					class={settingLabelClass}
+					for="iframe-sandbox-allow-scripts-label-control"
+				>
+					{$i18n.t('settings.personal.interface.iframeSandboxAllowScripts.label')}
+				</label>
+
+				<div class={settingControlClass}>
+					<Switch
+						ariaLabelledbyId="iframe-sandbox-allow-scripts-label"
+						tooltip={true}
+						bind:state={iframeSandboxAllowScripts}
+						inherited={isDefaultSetting('iframeSandboxAllowScripts')}
+						on:change={() => {
+							saveSettings({ iframeSandboxAllowScripts });
+						}}
+					/>
+				</div>
+			</div>
+			<p class={settingDescriptionClass}>
+				{$i18n.t('settings.personal.interface.iframeSandboxAllowScripts.description')}
+			</p>
+		</div>
+	{/if}
+
+	{#if $visibleControls['settings.iframe_sandbox_allow_same_origin']}
+		<div>
+			<div class={settingRowClass}>
+				<label
+					id="iframe-sandbox-allow-same-origin-label"
+					class={settingLabelClass}
+					for="iframe-sandbox-allow-same-origin-label-control"
+				>
+					{$i18n.t('settings.personal.interface.iframeSandboxAllowSameOrigin.label')}
+				</label>
+
+				<div class={settingControlClass}>
+					<Switch
+						ariaLabelledbyId="iframe-sandbox-allow-same-origin-label"
+						tooltip={true}
+						bind:state={iframeSandboxAllowSameOrigin}
+						inherited={isDefaultSetting('iframeSandboxAllowSameOrigin')}
+						on:change={() => {
+							saveSettings({ iframeSandboxAllowSameOrigin });
+						}}
+					/>
+				</div>
+			</div>
+			<p class={settingDescriptionClass}>
+				{$i18n.t('settings.personal.interface.iframeSandboxAllowSameOrigin.description')}
+			</p>
+		</div>
+	{/if}
+
+	{#if $visibleControls['settings.iframe_sandbox_allow_forms']}
+		<div>
+			<div class={settingRowClass}>
+				<label
+					id="iframe-sandbox-allow-forms-label"
+					class={settingLabelClass}
+					for="iframe-sandbox-allow-forms-label-control"
+				>
+					{$i18n.t('settings.personal.interface.iframeSandboxAllowForms.label')}
+				</label>
+
+				<div class={settingControlClass}>
+					<Switch
+						ariaLabelledbyId="iframe-sandbox-allow-forms-label"
+						tooltip={true}
+						bind:state={iframeSandboxAllowForms}
+						inherited={isDefaultSetting('iframeSandboxAllowForms')}
+						on:change={() => {
+							saveSettings({ iframeSandboxAllowForms });
+						}}
+					/>
+				</div>
+			</div>
+			<p class={settingDescriptionClass}>
+				{$i18n.t('settings.personal.interface.iframeSandboxAllowForms.description')}
+			</p>
+		</div>
+	{/if}
+
+	{#if $visibleControls['settings.iframe_sandbox_allow_downloads']}
+		<div>
+			<div class={settingRowClass}>
+				<label
+					id="iframe-sandbox-allow-downloads-label"
+					class={settingLabelClass}
+					for="iframe-sandbox-allow-downloads-label-control"
+				>
+					{$i18n.t('settings.personal.interface.iframeSandboxAllowDownloads.label')}
+				</label>
+
+				<div class={settingControlClass}>
+					<Switch
+						ariaLabelledbyId="iframe-sandbox-allow-downloads-label"
+						tooltip={true}
+						bind:state={iframeSandboxAllowDownloads}
+						inherited={isDefaultSetting('iframeSandboxAllowDownloads')}
+						on:change={() => {
+							saveSettings({ iframeSandboxAllowDownloads });
+						}}
+					/>
+				</div>
+			</div>
+			<p class={settingDescriptionClass}>
+				{$i18n.t('settings.personal.interface.iframeSandboxAllowDownloads.description')}
+			</p>
+		</div>
+	{/if}
+
+	{#if canUseCalls({ user: $user, config: $config })}
+		<div class={sectionHeadingClass}>
+			{$i18n.t('settings.personal.interface.sections.voice.title')}
+		</div>
+
+		<div>
+			<div class={settingRowClass}>
+				<label
+					class={settingLabelClass}
+					id="allow-voice-interruption-in-call-label"
+					for="allow-voice-interruption-in-call-label-control"
+				>
+					{$i18n.t('settings.personal.interface.allowVoiceInterruptionInCall.label')}
+				</label>
+
+				<div class={settingControlClass}>
+					<Switch
+						ariaLabelledbyId="allow-voice-interruption-in-call-label"
+						tooltip={true}
+						bind:state={voiceInterruption}
+						inherited={isDefaultSetting('voiceInterruption')}
+						on:change={() => {
+							saveSettings({ voiceInterruption });
+						}}
+					/>
+				</div>
+			</div>
+			<p class={settingDescriptionClass}>
+				{$i18n.t('settings.personal.interface.allowVoiceInterruptionInCall.description')}
+			</p>
+		</div>
+
+		<div>
+			<div class={settingRowClass}>
+				<label id="display-emoji-label" class={settingLabelClass} for="display-emoji-label-control">
+					{$i18n.t('settings.personal.interface.displayEmojiInCall.label')}
+				</label>
+
+				<div class={settingControlClass}>
+					<Switch
+						ariaLabelledbyId="display-emoji-label"
+						tooltip={true}
+						bind:state={showEmojiInCall}
+						inherited={isDefaultSetting('showEmojiInCall')}
+						on:change={() => {
+							saveSettings({ showEmojiInCall });
+						}}
+					/>
+				</div>
+			</div>
+			<p class={settingDescriptionClass}>
+				{$i18n.t('settings.personal.interface.displayEmojiInCall.description')}
+			</p>
+		</div>
+	{/if}
+
+	<div class={sectionHeadingClass}>
+		{$i18n.t('settings.personal.interface.sections.file.title')}
 	</div>
 
 	<div>
 		<div class={settingRowClass}>
-			<div id="iframe-sandbox-allow-scripts-label" class={settingLabelClass}>
-				{$i18n.t('iframe Sandbox Allow Scripts')}
-			</div>
-
-			<div class={settingControlClass}>
-				<Switch
-					ariaLabelledbyId="iframe-sandbox-allow-scripts-label"
-					tooltip={true}
-					bind:state={iframeSandboxAllowScripts}
-					inherited={isDefaultSetting('iframeSandboxAllowScripts')}
-					on:change={() => {
-						saveSettings({ iframeSandboxAllowScripts });
-					}}
-				/>
-			</div>
-		</div>
-		<p class={settingDescriptionClass}>
-			{$i18n.t('Allow scripts inside sandboxed iframes.')}
-		</p>
-	</div>
-
-	<div>
-		<div class={settingRowClass}>
-			<div id="iframe-sandbox-allow-same-origin-label" class={settingLabelClass}>
-				{$i18n.t('iframe Sandbox Allow Same Origin')}
-			</div>
-
-			<div class={settingControlClass}>
-				<Switch
-					ariaLabelledbyId="iframe-sandbox-allow-same-origin-label"
-					tooltip={true}
-					bind:state={iframeSandboxAllowSameOrigin}
-					inherited={isDefaultSetting('iframeSandboxAllowSameOrigin')}
-					on:change={() => {
-						saveSettings({ iframeSandboxAllowSameOrigin });
-					}}
-				/>
-			</div>
-		</div>
-		<p class={settingDescriptionClass}>
-			{$i18n.t('Allow artifacts to access same-origin browser APIs inside the sandbox.')}
-		</p>
-	</div>
-
-	<div>
-		<div class={settingRowClass}>
-			<div id="iframe-sandbox-allow-forms-label" class={settingLabelClass}>
-				{$i18n.t('iframe Sandbox Allow Forms')}
-			</div>
-
-			<div class={settingControlClass}>
-				<Switch
-					ariaLabelledbyId="iframe-sandbox-allow-forms-label"
-					tooltip={true}
-					bind:state={iframeSandboxAllowForms}
-					inherited={isDefaultSetting('iframeSandboxAllowForms')}
-					on:change={() => {
-						saveSettings({ iframeSandboxAllowForms });
-					}}
-				/>
-			</div>
-		</div>
-		<p class={settingDescriptionClass}>
-			{$i18n.t('Allow forms inside sandboxed artifact iframes.')}
-		</p>
-	</div>
-
-	<div>
-		<div class={settingRowClass}>
-			<div id="iframe-sandbox-allow-downloads-label" class={settingLabelClass}>
-				{$i18n.t('iframe Sandbox Allow Downloads')}
-			</div>
-
-			<div class={settingControlClass}>
-				<Switch
-					ariaLabelledbyId="iframe-sandbox-allow-downloads-label"
-					tooltip={true}
-					bind:state={iframeSandboxAllowDownloads}
-					inherited={isDefaultSetting('iframeSandboxAllowDownloads')}
-					on:change={() => {
-						saveSettings({ iframeSandboxAllowDownloads });
-					}}
-				/>
-			</div>
-		</div>
-		<p class={settingDescriptionClass}>
-			{$i18n.t('Allow downloads inside sandboxed iframes.')}
-		</p>
-	</div>
-
-	<div class={sectionHeadingClass}>{$i18n.t('Voice')}</div>
-
-	<div>
-		<div class={settingRowClass}>
-			<div class={settingLabelClass} id="allow-voice-interruption-in-call-label">
-				{$i18n.t('Allow Voice Interruption in Call')}
-			</div>
-
-			<div class={settingControlClass}>
-				<Switch
-					ariaLabelledbyId="allow-voice-interruption-in-call-label"
-					tooltip={true}
-					bind:state={voiceInterruption}
-					inherited={isDefaultSetting('voiceInterruption')}
-					on:change={() => {
-						saveSettings({ voiceInterruption });
-					}}
-				/>
-			</div>
-		</div>
-		<p class={settingDescriptionClass}>
-			{$i18n.t('Let speech interrupt the assistant during a voice call.')}
-		</p>
-	</div>
-
-	<div>
-		<div class={settingRowClass}>
-			<div id="display-emoji-label" class={settingLabelClass}>
-				{$i18n.t('Display Emoji in Call')}
-			</div>
-
-			<div class={settingControlClass}>
-				<Switch
-					ariaLabelledbyId="display-emoji-label"
-					tooltip={true}
-					bind:state={showEmojiInCall}
-					inherited={isDefaultSetting('showEmojiInCall')}
-					on:change={() => {
-						saveSettings({ showEmojiInCall });
-					}}
-				/>
-			</div>
-		</div>
-		<p class={settingDescriptionClass}>
-			{$i18n.t('Show emoji feedback in the call interface.')}
-		</p>
-	</div>
-
-	<div class={sectionHeadingClass}>{$i18n.t('File')}</div>
-
-	<div>
-		<div class={settingRowClass}>
-			<div id="default-upload-mode-label" class={settingLabelClass}>
-				{$i18n.t('Default Upload Mode')}
-			</div>
+			<label
+				id="default-upload-mode-label"
+				class={settingLabelClass}
+				for="default-upload-mode-label-control"
+			>
+				{$i18n.t('settings.personal.interface.defaultUploadMode.label')}
+			</label>
 
 			<button
+				id="default-upload-mode-label-control"
 				aria-labelledby="default-upload-mode-label default-upload-mode-state"
 				class={actionButtonClass}
 				on:click={() => {
@@ -1754,22 +2108,28 @@
 			</button>
 		</div>
 		<p class={settingDescriptionClass}>
-			{$i18n.t('Attach files with full content or focused retrieval by default.')}
+			{$i18n.t('settings.personal.interface.defaultUploadMode.description')}
 		</p>
 	</div>
 
 	<div>
 		<div class={settingRowClass}>
-			<div id="image-compression-label" class={settingLabelClass}>
-				{$i18n.t('Image Compression')}
-			</div>
+			<label
+				id="image-compression-label"
+				class={settingLabelClass}
+				for="image-compression-label-control"
+			>
+				{$i18n.t('settings.personal.interface.imageCompression.label')}
+			</label>
 
 			<div class={settingControlClass}>
 				{#if imageCompression}
 					<button
 						class={actionButtonClass}
 						type="button"
-						aria-label={$i18n.t('Open Modal To Manage Image Compression')}
+						aria-label={$i18n.t(
+							'settings.personal.interface.openModalToManageImageCompression.label'
+						)}
 						on:click={() => {
 							showManageImageCompressionModal = true;
 						}}
@@ -1794,12 +2154,16 @@
 		</p>
 	</div>
 
-	{#if imageCompression}
+	{#if imageCompression && canUseChannels({ user: $user, config: $config })}
 		<div>
 			<div class={settingRowClass}>
-				<div id="image-compression-in-channels-label" class={settingLabelClass}>
-					{$i18n.t('Compress Images in Channels')}
-				</div>
+				<label
+					id="image-compression-in-channels-label"
+					class={settingLabelClass}
+					for="image-compression-in-channels-label-control"
+				>
+					{$i18n.t('settings.personal.interface.compressImagesInChannels.label')}
+				</label>
 
 				<div class={settingControlClass}>
 					<Switch
@@ -1814,7 +2178,7 @@
 				</div>
 			</div>
 			<p class={settingDescriptionClass}>
-				{$i18n.t('Apply image compression to channel uploads too.')}
+				{$i18n.t('settings.personal.interface.compressImagesInChannels.description')}
 			</p>
 		</div>
 	{/if}

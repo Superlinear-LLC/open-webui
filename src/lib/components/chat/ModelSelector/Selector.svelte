@@ -1,6 +1,10 @@
 <script lang="ts">
+	import Comments from '$lib/components/comments/Comments.svelte';
+	import type { CommentsRequest } from '$lib/components/comments/CommentsPanel.svelte';
+	let comments: CommentsRequest | null = null;
 	import { marked } from 'marked';
 	import Fuse from 'fuse.js';
+	import { autoUpdate, computePosition, flip, offset, shift, size } from '@floating-ui/dom';
 
 	import dayjs from '$lib/dayjs';
 	import relativeTime from 'dayjs/plugin/relativeTime';
@@ -10,7 +14,7 @@
 	import ConfirmDialog from '$lib/components/common/ConfirmDialog.svelte';
 	import { flyAndScale } from '$lib/utils/transitions';
 
-	import { createEventDispatcher, onMount, getContext, tick } from 'svelte';
+	import { onMount, getContext, tick } from 'svelte';
 
 	import { deleteModel, getOllamaVersion, pullModel } from '$lib/apis/ollama';
 	import { deleteModelById } from '$lib/apis/models';
@@ -30,10 +34,15 @@
 		temporaryChatEnabled,
 		settings,
 		config,
-		showSettings
+		showSettings,
+		visibleControls
 	} from '$lib/stores';
 	import { toast } from 'svelte-sonner';
 	import { capitalizeFirstLetter, sanitizeResponseContent, splitStream } from '$lib/utils';
+	import {
+		resolveLocalizedModelDescription,
+		resolveLocalizedModelName
+	} from '$lib/utils/localizedContent';
 	import { getModels } from '$lib/apis';
 
 	import ChevronDown from '$lib/components/icons/ChevronDown.svelte';
@@ -48,18 +57,18 @@
 
 	import ModelItem from './ModelItem.svelte';
 
-	const i18n = getContext('i18n');
-	const dispatch = createEventDispatcher();
+	const i18n: any = getContext('i18n');
 
 	export let id = '';
 	export let value: string | null = '';
 	export let values: string[] | null = null;
+	export let onModelSelect: (models: string[]) => void = () => {};
 	export let compareEnabled = false;
 	export let multipleEnabled = false;
 	export let disabled = false;
-	export let placeholder = $i18n.t('Select a model');
+	export let placeholder: string | undefined = undefined;
 	export let searchEnabled = true;
-	export let searchPlaceholder = $i18n.t('Search a model');
+	export let searchPlaceholder: string | undefined = undefined;
 	export let selectionOnly = false;
 	export let includeHidden = false;
 
@@ -83,102 +92,39 @@
 	let show = false;
 	let triggerElement: HTMLElement | null = null;
 	let contentElement: HTMLElement | null = null;
-	let panelElement: HTMLElement | null = null;
-	let dropdownPosition = { top: 0, left: 0, maxHeight: undefined as number | undefined };
-	let positionFrame: number | undefined;
-	let settleTimers: number[] = [];
-
 	const portal = (node: HTMLElement) => {
 		document.body.appendChild(node);
+		const panel = node.firstElementChild as HTMLElement;
+		const cleanup = autoUpdate(triggerElement!, node, () => {
+			// Let flip measure the full list after content or viewport changes.
+			panel.style.maxHeight = '';
+			computePosition(triggerElement!, node, {
+				strategy: 'fixed',
+				placement: `${placement === 'auto' ? 'bottom' : placement}-${align}`,
+				middleware: [
+					offset(2),
+					placement === 'auto' && flip({ padding: 8, crossAxis: false }),
+					shift({ padding: 8 }),
+					size({
+						padding: 8,
+						apply({ availableHeight, availableWidth }) {
+							panel.style.maxHeight = `${Math.max(0, availableHeight)}px`;
+							panel.style.maxWidth = `${Math.max(0, availableWidth)}px`;
+						}
+					})
+				]
+			}).then(({ x, y }) => {
+				node.style.left = `${x}px`;
+				node.style.top = `${y}px`;
+			});
+		});
+
 		return {
 			destroy() {
+				cleanup();
 				node.remove();
 			}
 		};
-	};
-
-	const measureContent = () => {
-		if (!contentElement) return { width: 0, height: 0 };
-
-		const previousMaxHeight = panelElement?.style.maxHeight;
-		if (panelElement) panelElement.style.maxHeight = '';
-		const rect = contentElement.getBoundingClientRect();
-		if (panelElement && previousMaxHeight !== undefined) {
-			panelElement.style.maxHeight = previousMaxHeight;
-		}
-
-		return { width: rect.width, height: rect.height };
-	};
-
-	const visualViewportRect = () => {
-		const viewport = window.visualViewport;
-		return {
-			left: viewport?.offsetLeft ?? 0,
-			top: viewport?.offsetTop ?? 0,
-			width: viewport?.width ?? window.innerWidth,
-			height: viewport?.height ?? window.innerHeight
-		};
-	};
-
-	const updatePosition = () => {
-		if (!show || !triggerElement) return;
-		const rect = triggerElement.getBoundingClientRect();
-		const { width: contentWidth, height: contentHeight } = measureContent();
-		const viewport = visualViewportRect();
-		const viewportRight = viewport.left + viewport.width;
-		const viewportBottom = viewport.top + viewport.height;
-		const pad = 8;
-		const gap = 2;
-		const spaceBelow = viewportBottom - rect.bottom - gap - pad;
-		const spaceAbove = rect.top - viewport.top - gap - pad;
-		const preferredLeft = align === 'end' && contentWidth ? rect.right - contentWidth : rect.left;
-		const maxLeft = contentWidth ? viewportRight - contentWidth - pad : preferredLeft;
-		const resolvedPlacement =
-			placement === 'auto'
-				? contentHeight && spaceBelow < contentHeight && spaceAbove > spaceBelow
-					? 'top'
-					: 'bottom'
-				: placement;
-		const availableHeight = resolvedPlacement === 'top' ? spaceAbove : spaceBelow;
-		const constrainedHeight =
-			contentHeight && availableHeight >= 0
-				? Math.min(contentHeight, availableHeight)
-				: contentHeight;
-		const top =
-			resolvedPlacement === 'top' && contentHeight
-				? rect.top - constrainedHeight - gap
-				: rect.bottom + gap;
-
-		dropdownPosition = {
-			top: Math.max(viewport.top + pad, Math.min(top, viewportBottom - pad - constrainedHeight)),
-			left: Math.max(viewport.left + pad, Math.min(preferredLeft, maxLeft)),
-			maxHeight:
-				contentHeight && availableHeight >= 0 && contentHeight > availableHeight
-					? Math.max(0, availableHeight)
-					: undefined
-		};
-	};
-
-	const schedulePositionUpdate = () => {
-		if (positionFrame != null) cancelAnimationFrame(positionFrame);
-		positionFrame = requestAnimationFrame(() => {
-			positionFrame = undefined;
-			updatePosition();
-		});
-	};
-
-	const scheduleSettledPositionUpdates = () => {
-		for (const timer of settleTimers) window.clearTimeout(timer);
-		settleTimers = [];
-		schedulePositionUpdate();
-		for (const delay of [50, 150, 300]) {
-			settleTimers.push(window.setTimeout(schedulePositionUpdate, delay));
-		}
-	};
-
-	const handleScroll = (event: Event) => {
-		if (event.target instanceof Node && contentElement?.contains(event.target)) return;
-		schedulePositionUpdate();
 	};
 
 	const focusSearchInput = () => {
@@ -189,6 +135,13 @@
 	const focusChatInput = () => {
 		if (!$mobile) {
 			document.getElementById('chat-input')?.focus();
+		}
+
+		if (
+			$settings?.highContrastMode &&
+			(document.activeElement === document.body || contentElement?.contains(document.activeElement))
+		) {
+			document.getElementById(`model-selector-${id}-button`)?.focus();
 		}
 	};
 
@@ -202,9 +155,7 @@
 				setProviderDownloadConnections();
 			}
 			resetView();
-			updatePosition();
 			await tick();
-			updatePosition();
 			for (const delay of [0, 50, 150]) {
 				window.setTimeout(focusSearchInput, delay);
 			}
@@ -219,8 +170,8 @@
 		}
 	};
 
-	const handlePointerDown = (e: PointerEvent) => {
-		if (!show) return;
+	const handleWindowClick = (e: MouseEvent) => {
+		if (!show || e.detail === 0) return;
 		const target = e.target as Node;
 		if (
 			(triggerElement && triggerElement.contains(target)) ||
@@ -229,16 +180,23 @@
 		) {
 			return;
 		}
+		e.preventDefault();
+		e.stopPropagation();
 		show = false;
 		document.getElementById(`model-selector-${id}-button`)?.blur();
 	};
 
 	const handleKeydown = (e: KeyboardEvent) => {
 		if (show && e.key === 'Escape') {
+			if ((e.target as HTMLElement).closest?.('.model-selector-child-menu')) return;
 			e.preventDefault();
 			e.stopPropagation();
 			show = false;
-			document.getElementById(`model-selector-${id}-button`)?.blur();
+			if ($settings?.highContrastMode) {
+				document.getElementById(`model-selector-${id}-button`)?.focus();
+			} else {
+				document.getElementById(`model-selector-${id}-button`)?.blur();
+			}
 		}
 	};
 
@@ -246,14 +204,14 @@
 
 	let selectedModel = '';
 	$: selectedValues = values ?? (value ? [value] : []);
-	$: primaryValue = selectedValues[0] ?? value ?? '';
+	$: primaryValue = selectedValues[0] ?? '';
 	$: selectedModel = items.find((item) => item.value === primaryValue) ?? '';
 	$: selectedCount = selectedValues.filter(Boolean).length;
 	$: triggerLabel = selectedModel
 		? compareEnabled && selectedCount > 1
 			? `${selectedModel.label} +${selectedCount - 1}`
 			: selectedModel.label
-		: placeholder;
+		: (placeholder ?? $i18n.t('Select a model'));
 
 	let searchValue = '';
 
@@ -284,13 +242,13 @@
 	const getProviderPoolKey = (connection, model: string) =>
 		`${connection.provider}:${connection.idx}:${model}`;
 
-	const fuse = new Fuse(
+	$: fuse = new Fuse(
 		items.map((item) => {
 			const _item = {
 				...item,
-				modelName: item.model?.name,
+				modelName: resolveLocalizedModelName(item.model, $i18n.language),
 				tags: (item.model?.tags ?? []).map((tag) => tag.name).join(' '),
-				desc: item.model?.info?.meta?.description
+				desc: resolveLocalizedModelDescription(item.model, $i18n.language)
 			};
 			return _item;
 		}),
@@ -299,26 +257,6 @@
 			threshold: 0.4
 		}
 	);
-
-	const updateFuse = () => {
-		if (fuse) {
-			fuse.setCollection(
-				items.map((item) => {
-					const _item = {
-						...item,
-						modelName: item.model?.name,
-						tags: (item.model?.tags ?? []).map((tag) => tag.name).join(' '),
-						desc: item.model?.info?.meta?.description
-					};
-					return _item;
-				})
-			);
-		}
-	};
-
-	$: if (items) {
-		updateFuse();
-	}
 
 	$: filteredItems = (
 		searchValue
@@ -474,7 +412,6 @@
 		await tick();
 		const item = document.querySelector(`[data-arrow-selected="true"]`);
 		item?.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'instant' });
-		schedulePositionUpdate();
 	};
 
 	const setCompareEnabled = (enabled: boolean) => {
@@ -483,6 +420,7 @@
 		if (!enabled && values) {
 			values = [primaryValue || selectedValues[0] || ''];
 			value = values[0];
+			onModelSelect(values);
 		}
 	};
 
@@ -499,11 +437,13 @@
 
 				values = nextValues.length ? nextValues : [item.value];
 				value = values[0];
+				onModelSelect(values);
 				return;
 			}
 
 			values = [item.value];
 			value = item.value;
+			onModelSelect(values);
 			show = false;
 			window.setTimeout(focusChatInput, 0);
 			return;
@@ -820,18 +760,6 @@
 			// Remove duplicates and sort
 			tags = Array.from(new Set(tags)).sort((a, b) => a.localeCompare(b));
 		}
-
-		window.addEventListener('scroll', handleScroll, true);
-		window.visualViewport?.addEventListener('resize', scheduleSettledPositionUpdates);
-		window.visualViewport?.addEventListener('scroll', schedulePositionUpdate);
-
-		return () => {
-			if (positionFrame != null) cancelAnimationFrame(positionFrame);
-			for (const timer of settleTimers) window.clearTimeout(timer);
-			window.removeEventListener('scroll', handleScroll, true);
-			window.visualViewport?.removeEventListener('resize', scheduleSettledPositionUpdates);
-			window.visualViewport?.removeEventListener('scroll', schedulePositionUpdate);
-		};
 	});
 
 	const cancelModelPullHandler = async (model: string) => {
@@ -845,7 +773,6 @@
 			MODEL_DOWNLOAD_POOL.set({
 				...$MODEL_DOWNLOAD_POOL
 			});
-			await deleteModel(localStorage.token, model);
 			toast.success($i18n.t('{{model}} download has been canceled', { model: model }));
 		} else {
 			const displayModel = $MODEL_DOWNLOAD_POOL[model]?.model ?? model;
@@ -881,6 +808,7 @@
 	let deleteModelTarget: any = null;
 
 	const deleteModelHandler = async (model: any) => {
+		show = false;
 		deleteModelTarget = model;
 		showDeleteConfirm = true;
 	};
@@ -974,13 +902,9 @@
 	}}
 />
 
-<svelte:window
-	on:pointerdown={handlePointerDown}
-	on:keydown={handleKeydown}
-	on:resize={scheduleSettledPositionUpdates}
-/>
+<svelte:window on:click|capture={handleWindowClick} on:keydown|capture={handleKeydown} />
 
-<div class="relative w-full">
+<div class="relative flex w-full">
 	<button
 		bind:this={triggerElement}
 		class="focus-ring relative w-full {($settings?.highContrastMode ?? false)
@@ -988,7 +912,7 @@
 			: 'outline-hidden focus:outline-hidden'}"
 		aria-label={selectedModel
 			? $i18n.t('Selected model: {{modelName}}', { modelName: triggerLabel })
-			: placeholder}
+			: (placeholder ?? $i18n.t('Select a model'))}
 		aria-haspopup="listbox"
 		aria-expanded={show}
 		id="model-selector-{id}-button"
@@ -1019,13 +943,11 @@
 		<div
 			use:portal
 			bind:this={contentElement}
-			style="position: fixed; z-index: 9999; top: {dropdownPosition.top}px; left: {dropdownPosition.left}px;"
+			style="position: fixed; z-index: 9999; top: 0; left: 0; width: max-content;"
 		>
 			<div
-				bind:this={panelElement}
 				class="z-40 {className ??
 					'w-[20rem]'} max-w-[calc(100vw-1rem)] justify-start rounded-xl border border-gray-100 bg-white p-0.5 shadow-lg outline-hidden dark:border-gray-800 dark:bg-gray-850 dark:text-white flex flex-col overflow-hidden"
-				style={dropdownPosition.maxHeight ? `max-height: ${dropdownPosition.maxHeight}px;` : ''}
 				transition:flyAndScale
 			>
 				<slot>
@@ -1037,9 +959,18 @@
 								id="model-search-input"
 								bind:value={searchValue}
 								class="w-full bg-transparent text-[0.8125rem] font-normal outline-hidden placeholder:text-gray-400 dark:placeholder:text-gray-500"
-								placeholder={searchPlaceholder}
+								placeholder={searchPlaceholder ?? $i18n.t('Search a model')}
 								autocomplete="off"
 								aria-label={$i18n.t('Search In Models')}
+								role="combobox"
+								aria-autocomplete="list"
+								aria-expanded={filteredItems.length + downloadTargets.length > 0}
+								aria-controls="model-selector-list"
+								aria-activedescendant={filteredItems.length + downloadTargets.length > 0 &&
+								(selectedModelIdx >= filteredItems.length ||
+									(selectedModelIdx >= visibleStart && selectedModelIdx < visibleEnd))
+									? `model-option-${selectedModelIdx}`
+									: undefined}
 								on:keydown={(e) => {
 									if (e.code === 'Enter') {
 										if (selectedModelIdx >= filteredItems.length) {
@@ -1065,6 +996,18 @@
 										selectedModelIdx = 0;
 									}
 
+									if (
+										listContainer &&
+										selectedModelIdx < filteredItems.length &&
+										(selectedModelIdx < visibleStart || selectedModelIdx >= visibleEnd)
+									) {
+										listScrollTop = Math.max(
+											0,
+											selectedModelIdx * ITEM_HEIGHT - 128 + ITEM_HEIGHT / 2
+										);
+										listContainer.scrollTop = listScrollTop;
+									}
+
 									const item = document.querySelector(`[data-arrow-selected="true"]`);
 									item?.scrollIntoView({
 										block: 'center',
@@ -1081,8 +1024,12 @@
 											<button
 												type="button"
 												class="focus-ring flex size-[1.375rem] shrink-0 items-center justify-center rounded-lg transition-colors duration-100 {compareEnabled
-													? 'bg-gray-50 text-gray-700 hover:bg-gray-50 dark:bg-gray-800/60 dark:text-gray-200 dark:hover:bg-gray-800/60'
-													: 'text-gray-500 hover:bg-gray-50/40 hover:text-gray-700 dark:text-gray-400 dark:hover:bg-gray-800/40 dark:hover:text-gray-200'}"
+													? ($settings?.highContrastMode ?? false)
+														? 'bg-gray-200 text-gray-900 hover:bg-gray-200 dark:bg-gray-800 dark:text-gray-100 dark:hover:bg-gray-800'
+														: 'bg-gray-50 text-gray-700 hover:bg-gray-50 dark:bg-gray-800/60 dark:text-gray-200 dark:hover:bg-gray-800/60'
+													: ($settings?.highContrastMode ?? false)
+														? 'text-gray-700 hover:bg-gray-200 hover:text-gray-900 dark:text-gray-300 dark:hover:bg-gray-800 dark:hover:text-gray-100'
+														: 'text-gray-500 hover:bg-gray-50/40 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-gray-800/40 dark:hover:text-gray-100'}"
 												aria-label={$i18n.t('Compare')}
 												aria-pressed={compareEnabled}
 												on:click={() => {
@@ -1100,8 +1047,14 @@
 											placeholder={$i18n.t('All')}
 											align="end"
 											items={modelFilterItems}
-											triggerClass="relative flex h-[1.375rem] max-w-32 items-center gap-0.5 rounded-xl bg-transparent px-1.5 text-[0.6875rem] font-normal text-gray-400 transition-colors duration-100 hover:bg-gray-50/40 hover:text-gray-600 dark:text-gray-500 dark:hover:bg-gray-800/40 dark:hover:text-gray-300"
-											itemClass="flex h-[1.6875rem] w-full cursor-pointer items-center gap-2 rounded-xl bg-transparent px-2 text-[0.8125rem] capitalize hover:bg-gray-50/40 hover:text-gray-900 dark:hover:bg-gray-800/40 dark:hover:text-gray-100"
+											triggerClass="relative flex h-[1.375rem] max-w-32 items-center gap-0.5 rounded-xl bg-transparent px-1.5 text-[0.6875rem] font-normal transition-colors duration-100 {($settings?.highContrastMode ??
+											false)
+												? 'text-gray-700 hover:bg-gray-200 hover:text-gray-900 dark:text-gray-300 dark:hover:bg-gray-800 dark:hover:text-gray-100'
+												: 'text-gray-500 hover:bg-gray-50/40 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-gray-800/40 dark:hover:text-gray-100'}"
+											itemClass="flex h-[1.6875rem] w-full cursor-pointer items-center gap-2 rounded-xl bg-transparent px-2 text-[0.8125rem] capitalize {($settings?.highContrastMode ??
+											false)
+												? 'hover:bg-gray-200 hover:text-gray-900 dark:hover:bg-gray-800 dark:hover:text-gray-100'
+												: 'hover:bg-gray-50/40 hover:text-gray-900 dark:hover:bg-gray-800/40 dark:hover:text-gray-100'}"
 											contentClass="min-w-36 model-selector-child-menu"
 											onChange={setModelFilter}
 										/>
@@ -1110,6 +1063,16 @@
 							{/if}
 						</div>
 					{/if}
+
+					<div class="sr-only" aria-live="polite" aria-atomic="true">
+						{#if sanitizedSearchValue}
+							{filteredItems.length === 0
+								? $i18n.t('No results found')
+								: filteredItems.length === 1
+									? $i18n.t('1 item')
+									: $i18n.t('{{count}} items', { count: filteredItems.length })}
+						{/if}
+					</div>
 
 					<div class="group relative flex min-h-0 flex-1 flex-col">
 						{#if filteredItems.length === 0}
@@ -1150,6 +1113,7 @@
 							<div
 								class="min-h-0 flex-1 overflow-y-auto"
 								style="max-height: 18rem;"
+								id="model-selector-list"
 								role="listbox"
 								aria-label={$i18n.t('Available models')}
 								bind:this={listContainer}
@@ -1162,7 +1126,8 @@
 								{#each filteredItems.slice(visibleStart, visibleEnd) as item, i (item.value)}
 									{@const index = visibleStart + i}
 									<ModelItem
-										{selectedModelIdx}
+										onComment={(request) => (comments = request)}
+										bind:selectedModelIdx
 										{item}
 										{index}
 										value={primaryValue}
@@ -1174,6 +1139,9 @@
 										{selectedValues}
 										onClick={() => {
 											selectItem(item, index);
+										}}
+										onEdit={() => {
+											show = false;
 										}}
 									/>
 								{/each}
@@ -1190,12 +1158,15 @@
 									placement="top-start"
 								>
 									<div
+										id="model-option-{filteredItems.length + targetIndex}"
 										role="option"
 										aria-selected={selectedModelIdx === filteredItems.length + targetIndex}
 										data-arrow-selected={selectedModelIdx === filteredItems.length + targetIndex}
 										class="flex h-8 w-full select-none items-center gap-2 rounded-xl px-2 text-left text-[0.8125rem] font-normal text-gray-700 outline-hidden transition-colors duration-75 dark:text-gray-100 {selectedModelIdx ===
 										filteredItems.length + targetIndex
-											? 'bg-gray-50/70 dark:bg-gray-800/60'
+											? ($settings?.highContrastMode ?? false)
+												? 'bg-gray-200 dark:bg-gray-800'
+												: 'bg-gray-50/70 dark:bg-gray-800/60'
 											: ''}"
 									>
 										<Spinner className="size-3 shrink-0 text-gray-400 dark:text-gray-500" />
@@ -1240,12 +1211,18 @@
 								<Tooltip content={target.actionLabel} placement="top-start">
 									<button
 										type="button"
+										id="model-option-{filteredItems.length + targetIndex}"
 										role="option"
 										aria-selected={selectedModelIdx === filteredItems.length + targetIndex}
 										data-arrow-selected={selectedModelIdx === filteredItems.length + targetIndex}
-										class="focus-ring flex h-8 w-full cursor-pointer select-none items-center gap-2 rounded-xl px-2 text-left text-[0.8125rem] font-normal text-gray-700 outline-hidden transition-colors duration-75 hover:bg-gray-50/40 dark:text-gray-100 dark:hover:bg-gray-800/40 {selectedModelIdx ===
+										class="focus-ring flex h-8 w-full cursor-pointer select-none items-center gap-2 rounded-xl px-2 text-left text-[0.8125rem] font-normal text-gray-700 outline-hidden transition-colors duration-75 dark:text-gray-100 {($settings?.highContrastMode ??
+										false)
+											? 'hover:bg-gray-200 dark:hover:bg-gray-800'
+											: 'hover:bg-gray-50/40 dark:hover:bg-gray-800/40'} {selectedModelIdx ===
 										filteredItems.length + targetIndex
-											? 'bg-gray-50/70 dark:bg-gray-800/60'
+											? ($settings?.highContrastMode ?? false)
+												? 'bg-gray-200 dark:bg-gray-800'
+												: 'bg-gray-50/70 dark:bg-gray-800/60'
 											: ''}"
 										on:click={() => {
 											downloadModelHandler(target);
@@ -1279,8 +1256,10 @@
 								>
 									<Spinner className="size-3 shrink-0 text-gray-400 dark:text-gray-500" />
 									<div class="min-w-0 flex-1 truncate">
-										Downloading "{downloadName}"{download?.providerLabel
-											? ` from ${download.providerLabel}`
+										{$i18n.t('Downloading "{{name}}"', {
+											name: downloadName
+										})}{download?.providerLabel
+											? ` ${$i18n.t('from {{provider}}', { provider: download.providerLabel })}`
 											: ''}
 									</div>
 									{#if 'pullProgress' in download}
@@ -1320,11 +1299,18 @@
 						{/each}
 					</div>
 
-					{#if showSetDefault}
-						<div class="flex shrink-0 items-center justify-end px-2 py-1 leading-none">
+					{#if showSetDefault && $visibleControls['models.set_default']}
+						<div
+							class="flex shrink-0 items-center justify-end px-2 leading-none {($settings?.highContrastMode ??
+							false)
+								? ''
+								: 'py-1'}"
+						>
 							<button
 								type="button"
-								class="focus-ring text-[0.65rem] font-normal leading-none text-gray-500 underline-offset-2 transition-colors duration-100 hover:text-gray-700 hover:underline dark:text-gray-500 dark:hover:text-gray-300"
+								class="focus-ring {($settings?.highContrastMode ?? false)
+									? 'inline-flex min-h-6 items-center'
+									: ''} text-[0.65rem] font-normal leading-none text-gray-500 underline-offset-2 transition-colors duration-100 hover:text-gray-700 hover:underline dark:text-gray-500 dark:hover:text-gray-300"
 								on:click|stopPropagation={setDefaultHandler}
 							>
 								{$i18n.t('Set as default')}
@@ -1344,3 +1330,5 @@
 		</div>
 	{/if}
 </div>
+
+<Comments modal bind:view={comments} />
