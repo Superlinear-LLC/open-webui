@@ -93,6 +93,11 @@ let
       hash = "sha256-/SxdeQno2G/pLVMCDDEMoOTkMbg4wgfFdUubvwMI1Jo=";
     };
     dependencies = with pythonPackages; [ httpcore2 anyio idna truststore h2 ];
+    # The wheel asks for idna>=3.18; nixpkgs-unstable carries 3.11. idna's
+    # releases are Unicode-table refreshes, and httpx2 only uses it to encode
+    # hostnames, so the older table is accepted rather than overriding idna
+    # for the whole Python set.
+    pythonRelaxDeps = [ "idna" ];
     pythonImportsCheck = [ "httpx2" ];
     meta.license = lib.licenses.bsd3;
   };
