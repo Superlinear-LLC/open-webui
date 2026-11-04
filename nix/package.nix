@@ -41,9 +41,13 @@ let
       "--legacy-peer-deps"
     ];
 
+    # Anchor on the script's key. 0.13.0 changed `build` to call vite through
+    # node with a heap flag, and the old pattern then matched `build:watch`
+    # instead (its text is a substring there), so --replace-fail stayed green
+    # while `build` still ran pyodide:fetch and died on PyPI inside the sandbox.
     postPatch = ''
       substituteInPlace package.json \
-        --replace-fail "npm run pyodide:fetch && vite build" "vite build"
+        --replace-fail '"build": "npm run pyodide:fetch && ' '"build": "'
     '';
 
     propagatedBuildInputs = [ ffmpeg-headless ];
