@@ -105,6 +105,52 @@ let
     pythonImportsCheck = [ "httpx2" ];
     meta.license = lib.licenses.bsd3;
   };
+
+  # Upstream pins mcp==2.3.0 and imports its 2.x API (`from mcp import Client`,
+  # `mcp.client.advertise`); nixpkgs-unstable carries 1.26, and pythonRelaxDeps
+  # would accept it silently. The result is not a degraded feature: routers/
+  # configs.py imports MCPClient at module level, so the server would fail at
+  # start. 2.3.0 pins mcp-types to the same version and rides on httpx2, hence
+  # both from PyPI wheels here. Drop these when nixpkgs reaches 2.x.
+  mcp-types = pythonPackages.buildPythonPackage rec {
+    pname = "mcp-types";
+    version = "2.3.0";
+    format = "wheel";
+    src = fetchurl {
+      url = "https://files.pythonhosted.org/packages/ce/48/32583066b155bb5d4507e7887dc88ee23118cc4de8e2a12870c49719e2a8/mcp_types-${version}-py3-none-any.whl";
+      hash = "sha256-lo79va7fqwatrkDTeKNDlfEJDFkh1L48nN4oOq922R0=";
+    };
+    dependencies = with pythonPackages; [ pydantic typing-extensions ];
+    pythonImportsCheck = [ "mcp_types" ];
+    meta.license = lib.licenses.mit;
+  };
+
+  mcp = pythonPackages.buildPythonPackage rec {
+    pname = "mcp";
+    version = "2.3.0";
+    format = "wheel";
+    src = fetchurl {
+      url = "https://files.pythonhosted.org/packages/20/d7/4a2878f128df729db3ca04e71bfce26405cc2e0c9ebe19c592feeb4c61b9/mcp-${version}-py3-none-any.whl";
+      hash = "sha256-3QxEwInRZFPorjGjh3oAVNeiMUyqqB9eBUG5sXNLI3c=";
+    };
+    dependencies = with pythonPackages; [
+      anyio
+      httpx2
+      jsonschema
+      mcp-types
+      opentelemetry-api
+      pydantic
+      pyjwt
+      python-multipart
+      sse-starlette
+      starlette
+      typing-extensions
+      typing-inspection
+      uvicorn
+    ] ++ pythonPackages.pyjwt.optional-dependencies.crypto;
+    pythonImportsCheck = [ "mcp" "mcp.client.advertise" ];
+    meta.license = lib.licenses.mit;
+  };
 in
   pythonPackages.buildPythonApplication {
   inherit pname version src;
@@ -190,6 +236,8 @@ in
     loguru
     lxml
     markdown
+    # `mcp` and `httpx2` here are the let-bound PyPI builds above, not
+    # pythonPackages': a let binding outranks a `with` scope.
     mcp
     msoffcrypto-tool
     onnxruntime
