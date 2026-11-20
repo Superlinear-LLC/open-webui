@@ -490,6 +490,16 @@ class EventDefinitions(BaseModel):
     MODEL_DISABLED: EventDefinition = EventDefinition(
         name='model.disabled', description='A model was disabled.', message='Model disabled'
     )
+    MODEL_AVAILABLE: EventDefinition = EventDefinition(
+        name='model.available',
+        description='A model appeared in the fetched model list.',
+        message='Model available',
+    )
+    MODEL_UNAVAILABLE: EventDefinition = EventDefinition(
+        name='model.unavailable',
+        description='A model disappeared from the fetched model list.',
+        message='Model unavailable',
+    )
     MODEL_ACCESS_UPDATED: EventDefinition = EventDefinition(
         name='model.access_updated', description='Model access was updated.', message='Model access updated'
     )
@@ -684,6 +694,9 @@ class EventDefinitions(BaseModel):
     )
     IMAGE_EDITED: EventDefinition = EventDefinition(
         name='image.edited', description='An image was edited.', message='Image edited'
+    )
+    VIDEO_GENERATED: EventDefinition = EventDefinition(
+        name='video.generated', description='A video was generated.', message='Video generated'
     )
     AUDIO_SPEECH_REQUESTED: EventDefinition = EventDefinition(
         name='audio.speech_requested', description='Speech generation was requested.', message='Speech requested'

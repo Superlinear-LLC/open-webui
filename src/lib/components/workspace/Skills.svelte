@@ -1,4 +1,8 @@
 <script lang="ts">
+	import type { WorkspaceContext } from '$lib/types';
+	import { getPageContext } from '$lib/utils/page';
+	const { goto } = getPageContext();
+
 	import Comments from '$lib/components/comments/Comments.svelte';
 	import type { CommentsRequest } from '$lib/components/comments/CommentsPanel.svelte';
 	let comments: CommentsRequest | null = null;
@@ -17,15 +21,10 @@
 
 	import { onMount, getContext, tick, onDestroy } from 'svelte';
 	const i18n = getContext<typeof import('$lib/i18n').default>('i18n');
+	const { workspaceActions, workspaceCounts } = getContext<WorkspaceContext>('workspace');
 
-	import {
-		WEBUI_NAME,
-		user,
-		skills as _skills,
-		workspaceActions,
-		workspaceCounts
-	} from '$lib/stores';
-	import { goto } from '$app/navigation';
+	import { WEBUI_NAME, user, skills as _skills } from '$lib/stores';
+
 	import {
 		getSkills,
 		getSkillItems,
@@ -109,7 +108,6 @@
 
 	let filteredItems = null;
 	let total = null;
-	let loading = false;
 
 	let tagsContainerElement: HTMLDivElement;
 	let viewOption = '';
@@ -188,7 +186,6 @@
 		searchController = new AbortController();
 		const { signal } = searchController;
 
-		loading = true;
 		try {
 			const res = await getSkillItems(
 				localStorage.token,
@@ -212,14 +209,11 @@
 			}
 		} catch (err) {
 			console.error(err);
-		} finally {
-			if (!signal.aborted) loading = false;
 		}
 	};
 
 	const handleSearchInput = () => {
 		searchController?.abort();
-		loading = true;
 		clearTimeout(searchDebounceTimer);
 		searchDebounceTimer = setTimeout(() => {
 			if (page !== 1) {
@@ -303,8 +297,16 @@
 		viewOption = localStorage?.workspaceViewOption || '';
 		loaded = true;
 
+		let keyboardFocusedElement: Element | null = null;
+		const onFocusIn = (event: FocusEvent) => {
+			const target = event.target as Element;
+			keyboardFocusedElement = target.matches(':focus-visible:not(input, textarea)')
+				? target
+				: null;
+		};
+
 		const onKeyDown = (event) => {
-			if (event.key === 'Shift') {
+			if (event.key === 'Shift' && document.activeElement !== keyboardFocusedElement) {
 				shiftKey = true;
 			}
 		};
@@ -319,12 +321,14 @@
 			shiftKey = false;
 		};
 
+		window.addEventListener('focusin', onFocusIn);
 		window.addEventListener('keydown', onKeyDown);
 		window.addEventListener('keyup', onKeyUp);
 		window.addEventListener('blur', onBlur);
 
 		return () => {
 			clearTimeout(searchDebounceTimer);
+			window.removeEventListener('focusin', onFocusIn);
 			window.removeEventListener('keydown', onKeyDown);
 			window.removeEventListener('keyup', onKeyUp);
 			window.removeEventListener('blur', onBlur);
@@ -336,23 +340,22 @@
 		searchController?.abort();
 		clearTimeout(searchDebounceTimer);
 	});
+	import PageTitle from '$lib/components/common/PageTitle.svelte';
 </script>
 
 <WorkspaceAccessModal bind:this={accessModal} resourceType="skills" onUpdated={loadSkillItems} />
 
-<svelte:head>
-	<!-- LICENSE covers this Open WebUI browser-title identifier.
+<!-- LICENSE covers this Open WebUI browser-title identifier.
 	Do not alter, remove, obscure, or replace it except as LICENSE permits:
 	https://docs.openwebui.com/license. -->
-	<title>
-		{$i18n.t('Skills')} / {$WEBUI_NAME}
-	</title>
-</svelte:head>
+<PageTitle title={$i18n.t('Skills') + ' / ' + $WEBUI_NAME} />
 
-<h1 class="sr-only">{$i18n.t('Skills')}</h1>
+<h1 class="sr-only">
+	{$i18n.t('Skills')}
+</h1>
 
 <Comments modal bind:view={comments} resourceType="skill">
-	{#if loaded}
+	{#if loaded && filteredItems !== null && total !== null}
 		<ImportModal
 			bind:show={showImportFromLink}
 			loadUrlHandler={(url) => loadSkillByUrl(localStorage.token, url)}
@@ -455,7 +458,7 @@
 				</div>
 			</div>
 
-			{#if filteredItems === null || loading}
+			{#if filteredItems === null}
 				<div class="w-full h-full flex justify-center items-center my-16 mb-24">
 					<Spinner className="size-5" />
 				</div>

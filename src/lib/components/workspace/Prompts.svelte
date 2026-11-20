@@ -1,4 +1,8 @@
 <script lang="ts">
+	import type { WorkspaceContext } from '$lib/types';
+	import { getPageContext } from '$lib/utils/page';
+	const { goto } = getPageContext();
+
 	import Comments from '$lib/components/comments/Comments.svelte';
 	import type { CommentsRequest } from '$lib/components/comments/CommentsPanel.svelte';
 	let comments: CommentsRequest | null = null;
@@ -13,11 +17,10 @@
 
 	dayjs.extend(relativeTime);
 
-	import { goto } from '$app/navigation';
 	import { onMount, getContext, tick, onDestroy } from 'svelte';
 	import type { Writable } from 'svelte/store';
 	import type { i18n as i18nType } from 'i18next';
-	import { WEBUI_NAME, config, user, workspaceActions, workspaceCounts } from '$lib/stores';
+	import { WEBUI_NAME, config, user } from '$lib/stores';
 	import { COMMUNITY_ORIGINS } from '$lib/constants';
 
 	import {
@@ -70,6 +73,7 @@
 	let shiftKey = false;
 
 	const i18n = getContext<Writable<i18nType>>('i18n');
+	const { workspaceActions, workspaceCounts } = getContext<WorkspaceContext>('workspace');
 	let promptsImportInputElement: HTMLInputElement;
 	let loaded = false;
 
@@ -81,7 +85,6 @@
 	let prompts = null;
 	let tags = [];
 	let total = null;
-	let loading = false;
 
 	let showDeleteConfirm = false;
 	let showCreateModal = false;
@@ -139,7 +142,6 @@
 
 	const handleSearchInput = () => {
 		searchController?.abort();
-		loading = true;
 		clearTimeout(searchDebounceTimer);
 		searchDebounceTimer = setTimeout(() => {
 			if (page !== 1) {
@@ -187,7 +189,6 @@
 		searchController = new AbortController();
 		const { signal } = searchController;
 
-		loading = true;
 		try {
 			const res = await getPromptItems(
 				localStorage.token,
@@ -219,8 +220,6 @@
 			}
 		} catch (err) {
 			console.error(err);
-		} finally {
-			if (!signal.aborted) loading = false;
 		}
 	};
 
@@ -351,8 +350,16 @@
 			openCreateModal();
 		}
 
+		let keyboardFocusedElement: Element | null = null;
+		const onFocusIn = (event: FocusEvent) => {
+			const target = event.target as Element;
+			keyboardFocusedElement = target.matches(':focus-visible:not(input, textarea)')
+				? target
+				: null;
+		};
+
 		const onKeyDown = (event: KeyboardEvent) => {
-			if (event.key === 'Shift') {
+			if (event.key === 'Shift' && document.activeElement !== keyboardFocusedElement) {
 				shiftKey = true;
 			}
 		};
@@ -367,6 +374,7 @@
 			shiftKey = false;
 		};
 
+		window.addEventListener('focusin', onFocusIn);
 		window.addEventListener('keydown', onKeyDown);
 		window.addEventListener('keyup', onKeyUp);
 		window.addEventListener('blur', onBlur);
@@ -374,6 +382,7 @@
 		return () => {
 			clearTimeout(searchDebounceTimer);
 			window.removeEventListener('message', onMessage);
+			window.removeEventListener('focusin', onFocusIn);
 			window.removeEventListener('keydown', onKeyDown);
 			window.removeEventListener('keyup', onKeyUp);
 			window.removeEventListener('blur', onBlur);
@@ -384,23 +393,20 @@
 		searchController?.abort();
 		clearTimeout(searchDebounceTimer);
 	});
+	import PageTitle from '$lib/components/common/PageTitle.svelte';
 </script>
 
 <WorkspaceAccessModal bind:this={accessModal} resourceType="prompts" onUpdated={getPromptList} />
 
-<svelte:head>
-	<!-- LICENSE covers this Open WebUI browser-title identifier.
+<!-- LICENSE covers this Open WebUI browser-title identifier.
 	Do not alter, remove, obscure, or replace it except as LICENSE permits:
 	https://docs.openwebui.com/license. -->
-	<title>
-		{$i18n.t('Prompts')} / {$WEBUI_NAME}
-	</title>
-</svelte:head>
+<PageTitle title={$i18n.t('Prompts') + ' / ' + $WEBUI_NAME} />
 
 <h1 class="sr-only">{$i18n.t('Prompts')}</h1>
 
 <Comments modal bind:view={comments} resourceType="prompt">
-	{#if loaded}
+	{#if loaded && prompts !== null}
 		<DeleteConfirmDialog
 			bind:show={showDeleteConfirm}
 			title={$i18n.t('Delete prompt?')}
@@ -540,7 +546,7 @@
 				</div>
 			</div>
 
-			{#if prompts === null || loading}
+			{#if prompts === null}
 				<div class="w-full h-full flex justify-center items-center my-16 mb-24">
 					<Spinner className="size-5" />
 				</div>

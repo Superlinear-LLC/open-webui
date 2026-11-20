@@ -4,7 +4,7 @@
 	import { toast } from 'svelte-sonner';
 	import { copyToClipboard } from '$lib/utils';
 	import { equalEditorJSON } from '$lib/utils/editorJson';
-	import { showCallOverlay, skills, terminalSkills } from '$lib/stores';
+	import { mobile, voiceCall, skills, terminalSkills } from '$lib/stores';
 
 	marked.use({
 		breaks: true,
@@ -314,6 +314,7 @@
 	export let dragHandle = false;
 	export let link = false;
 	export let image = false;
+	export let allowExternalImages = false;
 	export let fileHandler = false;
 	export let attachments = false;
 	export let suggestions: Partial<import('@tiptap/suggestion').SuggestionOptions>[] | null = null;
@@ -403,9 +404,12 @@
 	export let json = false;
 	export let raw = false;
 	export let editable = true;
+	export let extensions: import('@tiptap/core').AnyExtension[] = [];
 	export let collaboration = false;
 
 	export let showFormattingToolbar = true;
+	/** Adds a comment action to the selection toolbar. */
+	export let onComment: (() => void) | null = null;
 
 	export let preserveBreaks = false;
 	export let generateAutoCompletion: Function = async () => null;
@@ -422,8 +426,8 @@
 	export let insertPromptAsRichText = false;
 	export let floatingMenuPlacement = 'bottom-start';
 
-	// Keep focus off the chat input during a call so the call overlay's M shortcut works
-	$: suppressAutoFocus = messageInput && $showCallOverlay;
+	// Avoid opening the mobile keyboard or stealing focus from the call overlay.
+	$: suppressAutoFocus = messageInput && ($mobile || $voiceCall);
 
 	let content = null;
 	let htmlValue = '';
@@ -478,6 +482,7 @@
 
 	let floatingMenuElement: Element | null = null;
 	let bubbleMenuElement: Element | null = null;
+	let formattingDismissed = false;
 	let element: Element | null = null;
 
 	let pendingUpdate = null;
@@ -954,6 +959,7 @@
 		editor = new Editor({
 			element: element,
 			extensions: [
+				...extensions,
 				StarterKit.configure({
 					link: link ? { autolink: autoFormat, linkOnPaste: autoFormat } : false,
 					code: false, // Disabled in favor of FixedCode (see workaround above)
@@ -984,7 +990,11 @@
 				...(richText
 					? [
 							CopyableCodeBlock.configure({
-								lowlight
+								// Auto-detecting the language freezes long documents.
+								lowlight: {
+									...lowlight,
+									highlightAuto: (code: string) => lowlight.highlight('plaintext', code)
+								}
 							}),
 							Typography,
 							TableKit.configure({
@@ -1013,7 +1023,9 @@
 					: []),
 
 				CharacterCount.configure({}),
-				...(image ? [Image.configure({ allowBase64: attachments })] : []),
+				...(image
+					? [Image.configure({ allowBase64: attachments, allowExternal: allowExternalImages })]
+					: []),
 				...(attachments ? [FileAttachment.configure({ context: componentContext })] : []),
 				...(fileHandler
 					? [
@@ -1094,7 +1106,7 @@
 			],
 			content: provider ? undefined : content,
 			editable,
-			autofocus: messageInput && !$showCallOverlay,
+			autofocus: messageInput && !$mobile && !$voiceCall,
 			onTransaction: ({ transaction }) => {
 				if (!editor) return;
 
@@ -1470,7 +1482,10 @@
 					editor.storage.files = files;
 				}
 			},
-			onSelectionUpdate: onSelectionUpdate,
+			onSelectionUpdate: (event) => {
+				formattingDismissed = false;
+				onSelectionUpdate(event);
+			},
 			onBlur: () => {
 				// Force-hide floating menus when editor loses focus.
 				// shouldShow alone isn't enough because it only runs on transactions.
@@ -1565,18 +1580,28 @@
 	};
 </script>
 
+<svelte:window
+	on:scroll|capture={(event) => {
+		const target = event.target;
+		if (element && target instanceof Node && (target.contains(element) || element.contains(target)))
+			formattingDismissed = true;
+	}}
+/>
+
 {#if richText && showFormattingToolbar}
 	<div
 		bind:this={bubbleMenuElement}
+		hidden={formattingDismissed}
 		id="bubble-menu"
 		class="p-0"
 		style="visibility: hidden; opacity: 0; position: absolute; z-index: 9999;"
 	>
-		<FormattingButtons {editor} />
+		<FormattingButtons {editor} {onComment} />
 	</div>
 
 	<div
 		bind:this={floatingMenuElement}
+		hidden={formattingDismissed}
 		id="floating-menu"
 		class="p-0"
 		style="visibility: hidden; opacity: 0; position: absolute; z-index: 9999;"

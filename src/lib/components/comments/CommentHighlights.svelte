@@ -161,14 +161,16 @@
 			for (const key of resourceKeys) void load(key);
 		}, 150);
 	};
-	const changed = (resource: CommentResource) => {
+	const changed = (event: { data?: { type?: string; data?: CommentResource } }) => {
+		if (event?.data?.type !== 'comments:changed' || !event.data.data) return;
+		const resource = event.data.data;
 		if (resourceKeys.includes(resourceQuery(resource))) refresh();
 	};
 	$: if (mounted && connection !== $socket) {
-		connection?.off('comments:changed', changed);
+		connection?.off('events', changed);
 		connection?.off('connect', refresh);
 		connection = $socket;
-		connection?.on('comments:changed', changed);
+		connection?.on('events', changed);
 		connection?.on('connect', refresh);
 	}
 	const restoreFocus = () => {
@@ -325,6 +327,14 @@
 			}
 		}
 	};
+	// The Android keyboard resizes the window (interactive-widget=resizes-content) when the composer focuses.
+	const resize = () => {
+		if ($commentSelectionDraft || preview?.contains(document.activeElement)) {
+			void popup?.popperInstance?.update();
+			return;
+		}
+		hide();
+	};
 	const scroll = (event: Event) => {
 		if ($commentSelectionDraft || preview?.contains(document.activeElement)) {
 			void popup?.popperInstance?.update();
@@ -356,14 +366,14 @@
 		document.addEventListener('focusin', focus);
 		document.addEventListener('keydown', keydown);
 		document.addEventListener('scroll', scroll, true);
-		window.addEventListener('resize', hide);
+		window.addEventListener('resize', resize);
 		window.addEventListener('focus', refresh);
 		window.addEventListener('comments:updated', refresh);
 		return () => {
 			mounted = false;
 			clearTimeout(refreshTimer);
 			for (const request of requests.values()) request.abort();
-			connection?.off('comments:changed', changed);
+			connection?.off('events', changed);
 			connection?.off('connect', refresh);
 			document.removeEventListener('mousemove', move);
 			document.removeEventListener('mouseleave', leave);
@@ -372,7 +382,7 @@
 			document.removeEventListener('focusin', focus);
 			document.removeEventListener('keydown', keydown);
 			document.removeEventListener('scroll', scroll, true);
-			window.removeEventListener('resize', hide);
+			window.removeEventListener('resize', resize);
 			window.removeEventListener('focus', refresh);
 			window.removeEventListener('comments:updated', refresh);
 			restoreFocus();
@@ -412,39 +422,41 @@
 				>
 					{draft.anchor.quote}
 				</div>
-				{#key `${resourceQuery(draft.options)}:${draft.options.target_id}:${draft.anchor.surface_id}:${draft.anchor.start}:${draft.anchor.end}`}
-					<CommentComposer
-						bind:this={composer}
-						resource={draft.options}
-						scrollable={false}
-						embedded={true}
-						draftKey={`${$user?.id}:${resourceQuery(draft.options)}:${draft.options.target_id}:${draft.anchor.surface_id}:${draft.anchor.source}:${draft.anchor.start}:${draft.anchor.end}`}
-						onCancel={dismissDraft}
-						onSubmitted={submitted}
-						onSubmit={async (content, temp_id) => {
-							const created = await commentsRequest<ResourceComment>('/', 'POST', {
-								resource_type: draft.options.resource_type,
-								resource_id: draft.options.resource_id,
-								target_type: draft.options.target_type,
-								target_id: draft.options.target_id,
-								anchor: draft.anchor,
-								content,
-								temp_id
-							});
-							if (!mounted || $commentSelectionDraft !== draft) return;
-							postedComment = created;
-							records = {
-								...records,
-								[resourceQuery(created)]: [
-									...(records[resourceQuery(created)] ?? []).filter(
-										(item) => item.id !== created.id
-									),
-									created
-								]
-							};
-						}}
-					/>
-				{/key}
+				<div class="-mr-1 mt-2">
+					{#key `${resourceQuery(draft.options)}:${draft.options.target_id}:${draft.anchor.surface_id}:${draft.anchor.start}:${draft.anchor.end}`}
+						<CommentComposer
+							bind:this={composer}
+							resource={draft.options}
+							scrollable={false}
+							embedded={true}
+							draftKey={`${$user?.id}:${resourceQuery(draft.options)}:${draft.options.target_id}:${draft.anchor.surface_id}:${draft.anchor.source}:${draft.anchor.start}:${draft.anchor.end}`}
+							onCancel={dismissDraft}
+							onSubmitted={submitted}
+							onSubmit={async (content, temp_id) => {
+								const created = await commentsRequest<ResourceComment>('/', 'POST', {
+									resource_type: draft.options.resource_type,
+									resource_id: draft.options.resource_id,
+									target_type: draft.options.target_type,
+									target_id: draft.options.target_id,
+									anchor: draft.anchor,
+									content,
+									temp_id
+								});
+								if (!mounted || $commentSelectionDraft !== draft) return;
+								postedComment = created;
+								records = {
+									...records,
+									[resourceQuery(created)]: [
+										...(records[resourceQuery(created)] ?? []).filter(
+											(item) => item.id !== created.id
+										),
+										created
+									]
+								};
+							}}
+						/>
+					{/key}
+				</div>
 			</div>
 		{/if}
 		{#each hovered as { comment } (comment.id)}
@@ -470,7 +482,7 @@
 						{comment.meta.anchor.quote}
 					</div>
 				{/if}
-				<div class="mt-1 text-[0.8125rem] text-gray-600 dark:text-gray-300 break-words">
+				<div class="mt-2 text-[0.8125rem] text-gray-600 dark:text-gray-300 break-words">
 					<Markdown
 						id={`comment-preview-${comment.id}`}
 						content={comment.content}
