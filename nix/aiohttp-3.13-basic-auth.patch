@@ -1,0 +1,48 @@
+diff --git a/backend/open_webui/routers/auths.py b/backend/open_webui/routers/auths.py
+index b26d785b2..5952cd0d2 100644
+--- a/backend/open_webui/routers/auths.py
++++ b/backend/open_webui/routers/auths.py
+@@ -10,7 +10,7 @@ import uuid
+ from ssl import CERT_NONE, CERT_REQUIRED, PROTOCOL_TLS
+ 
+ import jwt
+-from aiohttp import ClientSession, encode_basic_auth
++from aiohttp import BasicAuth, ClientSession
+ from fastapi import APIRouter, Depends, HTTPException, Request, status
+ from fastapi.responses import JSONResponse, Response
+ from ldap3 import NONE, Connection, Server, Tls
+@@ -1588,7 +1588,7 @@ async def get_token_client_id(client, token: str) -> str | None:
+                 introspection_endpoint,
+                 data={'token': token, 'token_type_hint': 'access_token'},
+                 headers={
+-                    'Authorization': encode_basic_auth(client.client_id, client.client_secret or '', encoding='latin1')
++                    'Authorization': BasicAuth(client.client_id, client.client_secret or '', encoding='latin1').encode()
+                 },
+                 ssl=AIOHTTP_CLIENT_SESSION_SSL,
+             ) as r:
+diff --git a/backend/open_webui/utils/oauth.py b/backend/open_webui/utils/oauth.py
+index 36db31bcd..a0f1e63f8 100644
+--- a/backend/open_webui/utils/oauth.py
++++ b/backend/open_webui/utils/oauth.py
+@@ -1225,9 +1225,7 @@ class OAuthClientManager(OAuthSessionRefresher):
+             refresh_headers = {'Content-Type': 'application/x-www-form-urlencoded'}
+             if hasattr(client, 'client_secret') and client.client_secret:
+                 if client.client_kwargs.get('token_endpoint_auth_method') == 'client_secret_basic':
+-                    refresh_headers['Authorization'] = aiohttp.encode_basic_auth(
+-                        client.client_id, client.client_secret, encoding='latin1'
+-                    )
++                    refresh_headers['Authorization'] = aiohttp.BasicAuth(client.client_id, client.client_secret, encoding='latin1').encode()
+                     # Some providers reject a body client_id next to Basic as a second credential (#19415)
+                     del refresh_data['client_id']
+                 else:
+@@ -1568,9 +1566,7 @@ class OAuthManager(OAuthSessionRefresher):
+             # Add client_secret if available (some providers require it)
+             if hasattr(client, 'client_secret') and client.client_secret:
+                 if client.client_kwargs.get('token_endpoint_auth_method') == 'client_secret_basic':
+-                    refresh_headers['Authorization'] = aiohttp.encode_basic_auth(
+-                        client.client_id, client.client_secret, encoding='latin1'
+-                    )
++                    refresh_headers['Authorization'] = aiohttp.BasicAuth(client.client_id, client.client_secret, encoding='latin1').encode()
+                     if not OAUTH_ACCESS_TOKEN_REQUEST_INCLUDE_CLIENT_ID:
+                         del refresh_data['client_id']
+                 else:

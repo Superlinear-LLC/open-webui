@@ -9,13 +9,13 @@
 
 let
   pname = "open-webui";
-  version = "0.13.0";
+  version = "0.13.4";
 
   src = fetchFromGitHub {
     owner = "open-webui";
     repo = "open-webui";
     tag = "v${version}";
-    hash = "sha256-SdRSV4boNtMQT+EH6T8F3jWIVceN64lej9t9zUxY4x0=";
+    hash = "sha256-WIIkor+oU9Lr68AzBlmvdsTPbij+tW9ObXd81dGmIvo=";
   };
 
   frontend = buildNpmPackage rec {
@@ -27,14 +27,14 @@ let
     # unpacks this distribution in place of the `pyodide:fetch` script that
     # postPatch strips out. Upstream pyodide switched to CPython-tracking
     # version numbers (0.28.x -> 314.x) between Open WebUI 0.10.2 and 0.11.1;
-    # 0.13.0 still resolves 314.0.3.
+    # 0.13.4 still resolves 314.0.3.
     pyodideVersion = "314.0.3";
     pyodide = fetchurl {
       url = "https://github.com/pyodide/pyodide/releases/download/${pyodideVersion}/pyodide-${pyodideVersion}.tar.bz2";
       hash = "sha256-oCgELZDbqedP377PNuqn1X6IvwrWGNnFBZ6xBAqnYSo=";
     };
 
-    npmDepsHash = "sha256-RghvGUP2Q6WdRGDJshfPpwuWuDTa10Wauv0evg9nKvA=";
+    npmDepsHash = "sha256-uw1FSeJxfCrqvxM6cPJcKOSOWG9g0VfaUUfGOVXIWco=";
 
     npmFlags = [
       "--force"
@@ -170,8 +170,18 @@ in
   # is_saved_chat_id() now, so such an emitter emits chat_id=None and skips the
   # database write rather than raising. Re-verify this if upstream ever
   # reintroduces a bare chat_id.startswith() in that path.
+  #
+  # aiohttp-3.13-basic-auth.patch: 0.13.4 pins aiohttp==3.14.5 and calls
+  # aiohttp.encode_basic_auth, new in 3.14; nixpkgs-unstable carries 3.13.5 and
+  # pythonRelaxDeps accepts it, so routers/auths.py fails at import and the
+  # server never starts (pythonImportsCheck still passes). On 3.14,
+  # BasicAuth.encode() is literally encode_basic_auth(login, password,
+  # encoding), and 3.13's BasicAuth.encode() produces the same
+  # "Basic base64(login:password)", so the three call sites use it instead of
+  # overriding aiohttp for the whole Python set. Drop it when nixpkgs has 3.14.
   patches = [
     ./oauth-session-preservation.patch
+    ./aiohttp-3.13-basic-auth.patch
   ];
 
   build-system = [ pythonPackages.hatchling ];
@@ -201,6 +211,8 @@ in
     anthropic
     argon2-cffi
     asgiref
+    # Pinned as a base dependency since 0.13.4; faster-whisper already pulls it.
+    av
     authlib
     azure-ai-documentintelligence
     azure-identity

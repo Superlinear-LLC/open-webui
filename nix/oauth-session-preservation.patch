@@ -1,7 +1,8 @@
 diff --git a/backend/open_webui/utils/oauth.py b/backend/open_webui/utils/oauth.py
+index 36db31bcd..e2d9c150e 100644
 --- a/backend/open_webui/utils/oauth.py
 +++ b/backend/open_webui/utils/oauth.py
-@@ -1055,10 +1055,11 @@ class OAuthClientManager:
+@@ -1171,10 +1171,11 @@ class OAuthClientManager(OAuthSessionRefresher):
                  if refreshed_token:
                      return refreshed_token
                  else:
@@ -15,7 +16,7 @@ diff --git a/backend/open_webui/utils/oauth.py b/backend/open_webui/utils/oauth.
                      return None
              return session.token
  
-@@ -1382,11 +1383,11 @@ class OAuthManager:
+@@ -1507,11 +1508,11 @@ class OAuthManager(OAuthSessionRefresher):
                  if refreshed_token:
                      return refreshed_token
                  else:
